@@ -1,4 +1,2 @@
-# VerseEras
-TTRPG Generation for the Verse setting.
-
-Currently not functional. 
+# Infinite Galaxies
+Procedural generation of an entire galaxy. 
