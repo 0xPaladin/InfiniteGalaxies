@@ -5,7 +5,7 @@ Procedural generation of an entire galaxy.
 When you first open the page you will be greeted with a randomly generated galaxy. 
 All of your tools to edit the galaxy will always be in the GUI on the right. 
 
-[Opening screen, a galaxy with crosshairs](docs/galaxy_crosshairs.png "galaxy with crosshairs")
+[Opening screen, a galaxy with crosshairs](docs/galaxy_crosshairs.png)
 
 Galaxies have the following inputs:
 - Seed: The core seed for random generation. It effects the whole galaxy and everything else within. 
@@ -31,7 +31,7 @@ Sectors have the following inputs:
 - Seed: A seed that will modify the generation of the systems within the sector.
 - #of Systems: How many systems to generate within the sector. Between 32 and 256. The more systems, the longer the generation will take and the more crowded the display will be.  
 
-[sector view](docs/sector.png "sector with system selected")
+[sector view](docs/sector.png)
 
 Click the save button to save changes you made to a particular sector. This automatically saves the galaxy as well. You will be able to select the sector from the main galaxy page on reload. 
 
@@ -53,7 +53,7 @@ System inputs:
 - Star Class: Change the primary star of the system. This will change how the planets are generated.
 - #of Planets: The number of planets. Between 0 and 24. Changing this will change orbits and planet types.  
 
-[system view](docs/system_system.png "system view on first entry")
+[system view](docs/system_system.png)
 
 Click the save button to save changes you made to the system. This automatically saves the galaxy as well. You will be able to select the system from the main galaxy page on reload.
 
@@ -67,4 +67,4 @@ Planet/Moon inputs:
 - Density: The density of the planet. This will change the gravity and habitability. 
 - #of Moons: The number of moons. Changing this will change their orbits as well.  
 
-[system with planet selected](docs/system_planet.png "system with planet selected")
+[system with planet selected](docs/system_planet.png)
