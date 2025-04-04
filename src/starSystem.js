@@ -76,10 +76,10 @@ class System {
     this.HI = list.length ? list.shift() : 5;
 
     //POI 
-    let _poi = (r) => r <= 4 ? 'raiders' : r <= 6 ? 'hazard' : r == 7 ? 'obstacle' : r <= 12 ? 'site' : 'settlement'
+    let _poi = (r) => r <= 2 ? 'raiders' : r <= 4 ? 'unique life' : r <= 6 ? 'hazard' : r == 7 ? 'obstacle' : r <= 12 ? 'site' : 'settlement';
     let _safe = this.parent.safety[1]
     //always make two, only use as defined by ssytem and rand 
-    let poiArr = _.fromN(2, () => _poi(RNG.d12() + _safe))
+    this._pois = _.fromN(2, () => _poi(RNG.d12() + _safe))
     //generate and assign
     this.POI = [];//poiArr.map((p,i)=>CreatePOI[p] ? CreatePOI[p](this, new Chance([this.seed, "POI", i].join("."))) : null)
   }
@@ -183,7 +183,7 @@ class System {
   /*
     Celestial Bodies 
   */
-  get habitible() {
+  get habitable() {
     return _.fromN(2, (i) => this.planetHI[i].concat(this.moonHI[i]))
   }
   get planetHI() {
@@ -236,6 +236,21 @@ class System {
   /*
     UI
   */
+  get info () {
+    let {name, _pois, stellarR, star, habitable} = this;
+    let [ne,ns] = habitable.map(h => h.length);
+
+    let info = _.html`
+    <div class="f4 pa1 bg-white-50">
+      <h3 class="ma0">${name}</h3>
+      <div><b>${star.spectralType}</b>, R ${stellarR.toFixed(2)} Sol, Luminosity ${star.luminosity.toFixed(2)} </div>
+      ${ne > 0 ? _.html`<div><b>Earthlike:</b> ${habitable[0].map((p,i) => _.html`<span>${p.shortName}${i<ne-1?"; ":""}</span>`)}</div>` : ""}
+      ${ns > 0 ? _.html`<div><b>Survivable:</b> ${habitable[1].map((p,i) => _.html`<span>${p.shortName}${i<ns-1?"; ":""}</span>`)}</div>` : ""}
+      <div><b>POI:</b> ${_pois.join(" & ")}</div>
+    </div>`;
+    return info;
+  }
+  
   get svgPad() {
     //show star 
     let SR = 695.700
@@ -263,6 +278,8 @@ class System {
 
     //GUI
     this.gui();
+    //write info 
+    App.updateState("info",this.info);
 
     //set gas giant gradients 
     this.setGradients()

@@ -79,8 +79,8 @@ class Galaxy {
     let RNG = new Chance(this.seed)
 
     //Radius and twist 
-    let _R = RNG.randBetween(8, 12);
-    this._R = (opts.radius || _R) * 5000;
+    let _R = RNG.randBetween(40, 60);
+    this._R = (opts.radius || _R) * 1000;
     let _twist = RNG.randBetween(30, 150);
     this._twist = (opts.twist || _twist) / 10;
 
@@ -110,7 +110,7 @@ class Galaxy {
   get data () {
     return {
       seed: this.seed,
-      radius: this._R / 5000,
+      radius: this._R / 1000,
       twist: this._twist * 10,
       cultureSeed : this._cultureSeed,
       cultureCount : this._cultureCount,
@@ -124,6 +124,7 @@ class Galaxy {
     let o = this.options = Object.assign(this.data,{
       x: 0,
       y: 0,
+      z: 0, 
       showCultures () {
         let g = SVG.find('#claims');
         g.visible()[0] ? g.hide() : g.show();
@@ -134,7 +135,7 @@ class Galaxy {
         App.galaxy.display();
       },
       viewSector() {
-        App.getSector(this.x, this.y);
+        App.getSector(this.x, this.y, this.z);
       },
       update() {
         //create new galaxy and display 
@@ -152,7 +153,7 @@ class Galaxy {
 
     //add controls 
     f.add(o, 'seed');
-    f.add(o, 'radius', 8, 12, 0.2);
+    f.add(o, 'radius', 40, 60, 1);
     f.add(o, 'twist', 30, 150, 1);
     //add culture input
     f.add(o, 'cultureSeed').name("Culture Seed");
@@ -171,14 +172,16 @@ class Galaxy {
       o[key] = o[key] > max ? max : o[key];
       //update gui 
       o["_c" + key].min(-max).max(max);
-      o._view.name("View Sector " + [o.x, o.y]);
+      o._view.name("View Sector " + [o.x, o.y, o.z]);
       //crosshairs 
       this.addCrosshair(o.x * 100, o.y * 100);
     }
+    
     //add sector selector
     let fs = f.addFolder('Sector Select')
     o._cx = fs.add(o, 'x').min(-sr[0]).max(sr[0]).step(1).listen().onFinishChange(v => updateGUI(Number(v), true));
     o._cy = fs.add(o, 'y').min(-sr[1]).max(sr[1]).step(1).listen().onFinishChange(v => updateGUI(Number(v)));
+    fs.add(o, 'z',-5,5,1);
     o._view = fs.add(o, 'viewSector').name('View Sector');
   }
 
@@ -250,6 +253,7 @@ class Galaxy {
     App.refresh();
     //add gui controls
     this.gui();
+    App.updateState("info","");
 
     //show 
     SVG.find('#starryHost').show();
@@ -282,13 +286,13 @@ class Galaxy {
       if (isWithin) {
         //update crosshairs and options 
         this.addCrosshair(gx * 100, gy * 100)
-        let sxy = [Math.round(gx), Math.round(gy)];
+        let sxy = [Math.round(gx), Math.round(gy), this.options.z];
         this.options._view.name("View Sector " + sxy)
         this.options.x = sxy[0];
         this.options.y = sxy[1];
 
         //pull culture cell - adjust by 10, culture cells are 1000 ly 
-        let cell = this._cultures._cells.get(sxy.map(v=> v < 0 ? Math.ceil(v/10) : Math.floor(v/10)).join());
+        let cell = this._cultures._cells.get(sxy.slice(0,2).map(v=> v < 0 ? Math.ceil(v/10) : Math.floor(v/10)).join());
         console.log(sxy,cell)
       }
     })

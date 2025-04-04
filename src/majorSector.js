@@ -30,7 +30,7 @@ class MajorSector {
     this.filter = "All"
 
     //sector id - x,y
-    this.id = opts.id || [0, 0];
+    this.id = opts.id || [0, 0, 0];
     let _id = this.id.join();
     //update with options from active state 
     opts = Object.assign(opts, (App.active[_id] ? App.active[_id].opts : {}));
@@ -113,7 +113,7 @@ class MajorSector {
     //systems 
     let sys = this.selectedSystem;
     let asf = f.addFolder('System');
-    asf.add(o, 'filter', ["All", "Earthlike", "Survivable", "Modded"]).name("System Filter").listen().onChange(function (e) {
+    asf.add(o, 'filter', ["All", "Earthlike", "Survivable"]).name("System Filter").listen().onChange(function (e) {
       //display stars with filter
       let { s, filter } = this.object;
       s.display({ filter });
@@ -312,6 +312,7 @@ class MajorSector {
     //gui 
     this.selectedSystem = this.selectedSystem || this.systems[0];
     this.gui();
+	App.updateState("info","");
 
     //svg disolay
     let app = App
@@ -370,6 +371,7 @@ class MajorSector {
         console.log(_s)
 
         //update gui  
+		App.updateState("info",_s.info);
         sector.addCrosshair(x/10,y/10);
         sector.selectedSystem = _s;
         sector.gui();
@@ -386,55 +388,6 @@ class MajorSector {
     UI
   */
   get UI() {
-    let { app, galaxy } = this
-    const { html } = app
-    let { showBars } = app.state
-
-    const systemFilters = ["All", "Earthlike", "Survivable", "Factions", "Settlements", "Ruins", "Gates", "Resources", "Outposts", "Dwellings", "Landmarks"]
-    let showSystems = this.showSystems(this.filter)
-
-    const SectorSystemUI = (s) => html`
-    <div class="pointer flex items-center justify-between db ba br2 ma1 pa2" onClick=${() => galaxy.show = s}>
-    	<div>${s.name}</div>
-    	<div>
-    		${s._planets.length}<div class="d-circle-sm"div class="d-circle-sm" style="background-color:${s.UIColor}"></div>
-    	</div>
-    </div>`
-
-    const SlideBarRight = html`<div class="db tc v-mid pointer dim ba br2 mh1 pa2 ${showBars[1] ? "" : "rotate-180"}" onClick=${() => app.updateState("showBars", showBars, showBars[1] = !showBars[1])}>➤</div>`
-    const SlideBarLeft = html`<div class="db f4 tc v-mid pointer dim ba br2 mr1 pa2 ${showBars[0] ? "rotate-180" : ""}" onClick=${() => app.updateState("showBars", showBars, showBars[0] = !showBars[0])}>➤</div>`
-
-    const linkCSS = "b pointer underline-hover hover-blue flex mh1"
-    const header = html`
-	<div class="flex">
-		<span class="${linkCSS}" onClick=${() => galaxy.show = galaxy}>Galaxy</span>::
-		<span class="${linkCSS}" onClick=${() => galaxy.show = this}>Sector [${this.id.join()}]</span>
-	</div>`
-
-    //filter 
-    const left = html`
-    ${galaxy._option.length == 0 ? "" : galaxy._option[1]}
-	<div class="flex" style="background-color: rgba(255,255,255,0.5);">
-		${SlideBarLeft}
-		<div class="dropdown" style="direction: ltr;">
-			<div class="f4 tc pointer dim underline-hover hover-blue db pa2 ba br2">System Filter: ${this.filter} [${showSystems.length}]</div>
-	        <div class="dropdown-content w-100 bg-white ba bw1 pa1">
-	    	    ${systemFilters.map(sf => html`
-	    		<div class="link pointer underline-hover" onClick=${() => app.refresh(this.filter = sf, galaxy.display())}>${sf}</div>`)}
-	    	</div>
-		</div>
-	</div>
-	<div class="${showBars[0] ? "" : "dn-ns"}">
-		<div class="vh-75 overflow-x-hidden overflow-auto">${showSystems.map(s => SectorSystemUI(s))}</div>
-	</div>`
-
-    const right = html``
-
-    return {
-      header,
-      left,
-      right
-    }
   }
 }
 

@@ -87,9 +87,18 @@ class Planetoid {
     return `${S.name} ${this.what == "Planet" ? _.romanNumeral(this.i) : _.romanNumeral(this.parent.i) + ", " + _.suffix((this.i + 1)) + " Moon"}`
   }
   get info() {
-    let { classification, _orbitalRadius, gravity, description, atmosphere, temp } = this
+    let { classification, _orbitalRadius, gravity, atmosphere, temp, radius, description, shortName} = this
+    let m = classification == "rocky" ? 6378 : 69911;   // radius of earth or jupiter
+    let dif = radius/m;
 
-    return `${_orbitalRadius.toFixed(1)} ${this.what == "Planet" ? "AU" : "LD"}, ${classification}, ${gravity.toFixed(2)}g, ${temp}, ${atmosphere.toLowerCase()} atmosphere, ${description}`
+    let info = _.html`
+    <div class="f4 pa1 bg-white-50">
+      <h3 class="ma0">${shortName}</h3>
+      <div>${_orbitalRadius.toFixed(1)} ${this.what == "Planet" ? "AU" : "LD"}, ${classification}, ${dif.toFixed(2)} ${classification == "rocky" ? "Earth" : "Jupiter"}</div>
+      <div>${gravity.toFixed(2)}g, ${temp}, ${atmosphere.toLowerCase()} atmosphere</div>
+      <div>${description}</div>
+    </div>`;
+    return info;
   }
   get cssClass() {
     let _type = this.classification
@@ -248,9 +257,9 @@ class Planetoid {
   }
   //click functionality in sysyem 
   onClick() {
-    let G = App.galaxy
-    this.gui()
-    console.log(this)
+    this.gui();
+    App.updateState("info",this.info);
+    console.log(this);
   }
   //planet display 
   display(shader = "Surface") {
@@ -368,6 +377,9 @@ class Planetoid {
     f.add(o, 'density', ...this.template.density).name('Density').decimals(2).listen().onFinishChange(v => applyMod({density:v}));
     what == "Planet" ? f.add(o, 'moons',0,20,1).name('# of Moons').onFinishChange(v => applyMod({moons:v})) : null;
     f.add(o, 'save').name('Save');
+
+    //set info 
+    App.updateState("info",this.info);
 
     //apply mod 
     const applyMod = (_mod) => {

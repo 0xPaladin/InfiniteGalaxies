@@ -57,21 +57,9 @@ class App extends Component {
     super();
     this.state = {
       show: "Galaxy",
-      saved: [],
-      sub: "",
-      reveal: [],
       dialog: "",
+      info : "",
       //for UI selection 
-      galaxyView: "Sector",
-      isometric: "Flat",
-      mission: "",
-      filter: "",
-      filterSystem: "All",
-      selection: "",
-      selected: "",
-      showBars: [true, true],
-      //time keeping 
-      tick: [0, 0, 0]
     };
 
     //save to global
@@ -105,8 +93,8 @@ class App extends Component {
       sysF () {
         let sys = window.App.active[this.sysSel];
         //create sector 
-        let [x,y] = sys.pid.split(",").map(Number);
-        window.App.getSector(x,y);
+        let [x,y,z] = sys.pid.split(",").map(Number);
+        window.App.getSector(x,y,z);
         window.App.sector.refresh(sys.seed);
       }
     }
@@ -168,6 +156,7 @@ class App extends Component {
 
     //timer 
     setInterval(() => {
+      this.refresh();
     }, 1000)
 
     //Watch for browser/canvas resize events
@@ -203,8 +192,8 @@ class App extends Component {
     })
   }
 
-  getSector (x,y) {
-    this.sector = new MajorSector({ id: [x,y] });
+  getSector (x,y, z) {
+    this.sector = new MajorSector({ id: [x,y,z] });
     this.sector.refresh();
     this.sector.display();
   }
@@ -285,14 +274,13 @@ class App extends Component {
   }
 
   //main page render 
-  render({ }, { show, active, selected, filter, filterSystem, isometric, galaxyView }) {
-    let G = this.galaxy
-
+  render({ }, {info}) {
     //final layout 
     return html`
 	<div class="absolute z-0 top-0 left-0 w-100 h-100 pa2">
       <canvas id="starryHost" class="w-100 h-100"></canvas>
       <div id="map" class="z-0 absolute top-0 left-0 w-100 h-100 pa2"></div>
+      <div id="overlay" class="z-1 absolute top-0 left-0 pa2">${info}</div>
       ${this.show}
     </div>
     ${this.dialog}
