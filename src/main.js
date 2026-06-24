@@ -1,56 +1,30 @@
-/*
-  V0.3
-*/
+import "./engine/mixins.js"
 
-/*
-  Mixins for standard functions
-  Array, Math, Sting...
-*/
-import "./mixins.js"
-
-/*
-  Chance RNG
-*/
 import "../lib/chance.slim.js"
 const chance = new Chance()
 
-/*
-  Storage - localforage
-  https://localforage.github.io/localForage/
-*/
 import "../lib/localforage.min.js"
 const DB = localforage.createInstance({
   name: "InfinteGalaxies",
   storeName: 'galaxies',
 })
-/*
-  SVG
-  https://svgjs.dev/docs/3.0/getting-started/
-*/
 
-/*
-  UI Resources  
-*/
-//Preact
-import { h, Component, render } from '../lib/preact.module.js';
-import htm from '../lib/htm.module.js';
-// Initialize htm with Preact
-const html = _.html = htm.bind(h);
-//lil GUI
+import { html, render, Component } from 'https://esm.sh/htm/preact/standalone';
+_.html = html;
+
 import GUI from '../lib/lil-gui.0.20.js';
 
-/*
-  App Sub UI
-*/
-import { Galaxy } from './galaxy.js';
-import { MajorSector } from './majorSector.js';
-import *as UI from './UI.js';
-import { System } from "./starSystem.js"
+import { Galaxy } from './engine/galaxy/galaxy.js';
+import { MajorSector } from './engine/galaxy/sector.js';
+import * as UI from './UI.js';
+import { System } from "./engine/system/starSystem.js"
 
-/*
-  Declare the main App 
-*/
+import { setupGalaxyGUI } from './UI/galaxyUI.js';
+import { setupSectorGUI, getSystemInfo } from './UI/sectorUI.js';
+import { setupSystemGUI } from './UI/systemUI.js';
+import { setupPlanetGUI, getPlanetInfo } from './UI/planetUI.js';
 
+import { init as initThree, resizeView, setGalaxyView, setSectorView, setSystemView, setCrosshair, upgradeSystemPlanet, zoomToPlanet } from './engine/render/threeHost.js';
 
 class App extends Component {
   constructor() {
@@ -58,44 +32,36 @@ class App extends Component {
     this.state = {
       show: "Galaxy",
       dialog: "",
-      info : "",
-      //for UI selection 
+      info: "",
     };
 
-    //save to global
     window.App = this;
 
     this.DB = DB
-    //use in other views 
     this.html = html
 
-    //active objects
     this.active = {}
     this.toSave = new Set();
 
-    /*
-      Gui and data for gui
-    */
     this.guiOpts = {
       galArr: [],
       galSel: '',
-      galF () {
+      galF() {
         window.App.load(this.galSel);
       },
       secArr: [],
       secSel: '',
-      secF () {
-        let [x,y] = this.secSel.split(",").map(Number);
-        window.App.getSector(x,y);
+      secF() {
+        let [x, y] = this.secSel.split(",").map(Number);
+        window.App.getSector(x, y);
       },
       sysArr: [],
       sysSel: '',
-      sysF () {
+      sysF() {
         let sys = window.App.active[this.sysSel];
-        //create sector 
-        let [x,y,z] = sys.pid.split(",").map(Number);
-        window.App.getSector(x,y,z);
-        window.App.sector.refresh(sys.seed);
+        let [x, y, z] = sys.pid.split(",").map(Number);
+        window.App.getSector(x, y, z);
+        window.App.sector.refresh(sys.seed, window.App.active);
       }
     }
 
@@ -109,121 +75,140 @@ class App extends Component {
       let g = this.gui;
 
       g._load.destroy();
-      //establish load if active exist
       let go = this.guiOpts;
       go.galArr.length > 0 ? g._load = g.addFolder("Load Saved") : null;
-      
-      //add gui selectors if available
+
       ['gal.Galaxy', 'sec.Sector', 'sys.System'].forEach(w => {
         let [_id, name] = w.split(".");
-        //if no data, skip
-        if(go[`${_id}Arr`].length == 0) {
-          return;
-        }
-        //set selector and gui 
+        if (go[`${_id}Arr`].length == 0) return;
         go[`${_id}Sel`] = name;
         g._load.add(go, `${_id}Sel`, go[`${_id}Arr`]).name(name).onChange(v => go[`${_id}F`](v));
       })
 
-      //add nav for ui 
       g._nav.destroy();
       g._nav = g.addFolder("Nav");
 
-      //data folder 
       g._f ? g._f.destroy() : null;
       g._f = g.addFolder(id);
-      return {
-        f: g._f,
-        nav: g._nav
-      }
+      return { f: g._f, nav: g._nav }
     };
 
+    this._bindGalaxyCallbacks = (galaxy) => {
+      galaxy._onClick = (self, event, data) => {};
+      galaxy._display = (self, events) => setGalaxyView(self, events);
+      galaxy._setCrosshair = (x, y) => setCrosshair(x, y);
+      galaxy._save = (data) => {
+        this.active[this.galaxy.seed] = data;
+        DB.setItem(this.galaxy.seed, this.active);
+      };
+    };
 
+    this._bindSectorCallbacks = (sector) => {
+      sector._onClick = (self, event, data) => {
+        if (event === 'sectorStarClick') {
+          this.updateState("info", getSystemInfo(data.system));
+          setupSectorGUI(self);
+        }
+      };
+      sector._display = (self, events) => setSectorView(self, events);
+      sector._setCrosshair = (x, y, z) => setCrosshair(x, y, z);
+    };
+
+    this._bindSystemCallbacks = (system) => {
+      system._onClick = (self, event, data) => {
+        if (event === 'systemDisplay') {
+          this.updateState("info", getSystemInfo(self));
+          setupSystemGUI(self);
+        } else if (event === 'systemPlanetClick') {
+          const { planet, group } = data;
+          planet._upgradeCallback = () => {
+            if (group) {
+              upgradeSystemPlanet(group, planet);
+              zoomToPlanet(group, planet);
+            }
+          };
+          this.updateState("info", getPlanetInfo(planet));
+          setupPlanetGUI(planet);
+          if (planet._upgradeCallback) planet._upgradeCallback();
+        }
+      };
+      system._display = (self, events) => setSystemView(self, events);
+    };
   }
 
-  // Lifecycle: Called whenever our component is created
   async componentDidMount() {
-    //generate galaxy and display 
+    const container = document.getElementById('threeHost');
+    if (container) initThree(container);
+
     this.random();
 
-    //now get ids for saves 
     DB.iterate((value, key) => {
-      // Resulting key/value pair
       this.guiOpts.galArr.push(key);
     }).then(() => {
-      this.galaxy.gui();
+      setupGalaxyGUI(this.galaxy);
     })
 
-    //timer 
     setInterval(() => {
       this.refresh();
     }, 1000)
 
-    //Watch for browser/canvas resize events
     window.addEventListener("resize", () => {
-      this.galaxy.display()
-      this.refresh()
-    }
-    );
+      resizeView();
+    });
   }
 
-  // Lifecycle: Called just before our component will be destroyed
   componentWillUnmount() { }
 
-  random () {
-    ['sec','sys'].forEach(w => {
+  random() {
+    ['sec', 'sys'].forEach(w => {
       this.guiOpts[`${w}Arr`] = [];
       this.guiOpts[`${w}Sel`] = '';
     })
-    //generate galaxy and display 
     this.galaxy = new Galaxy();
+    this.galaxy.app = this;
+    this._bindGalaxyCallbacks(this.galaxy);
     this.galaxy.display();
+    setupGalaxyGUI(this.galaxy);
   }
 
-  load (_id) {
-    //pull from db 
+  load(_id) {
     DB.getItem(_id).then((saved) => {
-      //galaxy data 
       this.galaxy = new Galaxy(saved[_id]);
-      //update active state with all other saved data
+      this.galaxy.app = this;
+      this._bindGalaxyCallbacks(this.galaxy);
       this.mapActive(saved);
-      //display
       this.galaxy.display();
+      setupGalaxyGUI(this.galaxy);
     })
   }
 
-  getSector (x,y, z) {
-    this.sector = new MajorSector({ id: [x,y,z] });
-    this.sector.refresh();
+  getSector(x, y, z) {
+    let _id = [x, y, z].join();
+    let saved = this.active[_id] || {};
+    this.sector = new MajorSector({ id: [x, y, z], galaxy: this.galaxy, saved });
+    this._bindSectorCallbacks(this.sector);
+    this.sector.refresh(-1, this.active);
     this.sector.display();
+    setupSectorGUI(this.sector);
   }
 
   mapActive(data) {
     let go = this.guiOpts;
-    ['sec','sys'].forEach(w => {
+    ['sec', 'sys'].forEach(w => {
       go[`${w}Arr`] = [];
       go[`${w}Sel`] = '';
     })
-    //set active
     this.active = data;
 
-    //run through data looking for IDs 
     Object.keys(data).forEach(key => {
-      if (key == this.galaxy.seed) {
-        return;
-      }
+      if (key == this.galaxy.seed) return;
       if (key.includes(",")) {
         go.secArr.push(key);
-      }
-      else {
+      } else {
         go.sysArr.push(key);
       }
     })
   }
-
-  /*
-    Render functions 
-  */
 
   notify(text, type = "success") {
     let opts = {
@@ -232,11 +217,9 @@ class App extends Component {
       text,
       layout: "center"
     }
-
     new Noty(opts).show();
   }
 
-  //main function for updating state 
   async updateState(what, val = "") {
     let s = {}
     s[what] = val
@@ -267,19 +250,15 @@ class App extends Component {
     return what == "" ? "" : UI.Dialog(this)
   }
 
-  //clears current UI 
   cancel() {
     this.show = ""
     this.dialog = "Main"
   }
 
-  //main page render 
-  render({ }, {info}) {
-    //final layout 
+  render({ }, { info }) {
     return html`
-	<div class="absolute z-0 top-0 left-0 w-100 h-100 pa2">
-      <canvas id="starryHost" class="w-100 h-100"></canvas>
-      <div id="map" class="z-0 absolute top-0 left-0 w-100 h-100 pa2"></div>
+	<div class="fixed top-0 left-0 w-100 h-100">
+      <div id="threeHost"></div>
       <div id="overlay" class="z-1 absolute top-0 left-0 pa2">${info}</div>
       ${this.show}
     </div>

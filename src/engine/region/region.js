@@ -1,6 +1,6 @@
-import {Ancients, CreateAncient} from './ancients.js';
-import {RandomPeople} from './people.js';
-import {Elements,Magic} from './data.js';
+import {Ancients, CreateAncient} from '../peoples/factions.js';
+import {RandomPeople} from '../peoples/people.js';
+import {Elements,Magic} from '../constants/data.js';
 
 /*
   Factions

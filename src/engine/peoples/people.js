@@ -1,4 +1,4 @@
-import*as Data from './data.js';
+import*as Data from '../constants/data.js';
 
 const ECONOMY = ['struggling', 'poor', 'comfortable', 'wealthy', 'booming']
 const MILITARY = ['pathetic', 'weak', 'capable', 'strong', 'mighty']

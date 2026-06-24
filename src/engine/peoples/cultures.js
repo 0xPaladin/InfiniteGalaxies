@@ -1,10 +1,10 @@
 const randColor = (PRNG) => {
-    let h = PRNG.randBetween(0,360);  // Hue
-    let s = PRNG.randBetween(30,100); //saturation, avoiding very pale 
-    let l = PRNG.randBetween(20,80); // lightness, avoiding very light/dark 
+    let h = PRNG.randBetween(0, 360);  // Hue
+    let s = PRNG.randBetween(30, 100); //saturation, avoiding very pale 
+    let l = PRNG.randBetween(20, 80); // lightness, avoiding very light/dark 
 
     //convert to hex 
-    return _.hslToHex(h,s,l);
+    return _.hslToHex(h, s, l);
 }
 
 /*
@@ -41,7 +41,7 @@ class Cell {
     get nAlive() {
         return this.neighbors.filter(n => n && n.state == 1);
     }
-    get claims () {
+    get claims() {
         return this._claims.map(id => this.m.cultures[id]);
     }
     claim(id) {
@@ -54,8 +54,10 @@ class Cell {
 
 //Manages the Cultures and steping through generations of life 
 export class Cultures {
-    constructor(seed, R, birth = 77, steps = 33) {
+    constructor(seed, R, birth = 77, steps = 1) {
         this.seed = seed;
+        this.birth = birth;
+
         this.r = R / 1000;
         //set of all viable 
         this._cells = new Map();
@@ -78,7 +80,7 @@ export class Cultures {
         return this._cells.size;
     }
 
-    get inhabited () {
+    get inhabited() {
         return [...this._cells.values()].filter(c => c._claims.length > 0);
     }
 
@@ -97,8 +99,8 @@ export class Cultures {
                 } else {
                     _cultures[cid] = {
                         id: cid,
-                        init : this._cultures[cid],
-                        lastAct : this._lastAct[cid],
+                        init: this._cultures[cid],
+                        lastAct: this._lastAct[cid],
                         color: this._colors[cid],
                         cells: [c],
                         //helper function to determine if culture is active/alive
@@ -113,7 +115,7 @@ export class Cultures {
             })
         });
 
-        return Object.values(_cultures).sort((a,b)=> a.id-b.id);
+        return Object.values(_cultures).sort((a, b) => a.id - b.id);
     }
 
     init() {

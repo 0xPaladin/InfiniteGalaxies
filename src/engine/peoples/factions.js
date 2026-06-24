@@ -1,6 +1,6 @@
 import {MakeName} from './random_name.js';
 import {RandomPeople} from './people.js';
-import*as Data from './data.js';
+import*as Data from '../constants/data.js';
 
 /*
   Ancients 
@@ -324,4 +324,4 @@ class Faction {
   }
 }
 
-export {Ancients, Faction}
+export {Ancients, CreateAncient, Faction}
