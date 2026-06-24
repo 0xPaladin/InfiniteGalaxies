@@ -5,7 +5,7 @@ import {
   createStarGroup, createPlanetMesh, createMoonMesh,
   disposeStarGroup, disposePlanetGroup,
   updateStarUniforms, upgradePlanetMesh,
-} from './engineAdapter.js';
+} from './planet-render.js';
 
 let renderer, scene, viewGroup, camera, controls;
 let animationId = null;

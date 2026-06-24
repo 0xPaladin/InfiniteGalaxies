@@ -11,12 +11,11 @@ All generation and Three.js rendering code lives under `src/engine/`:
 
 | Path | Purpose |
 | ---- | ------- |
-| `render/threeHost.js` | Three.js rendering host (galaxy/sector/system views) |
-| `render/engineAdapter.js` | World Engine procedural mesh adapter |
+| `render/galaxy-render.js` | Three.js rendering host (galaxy/sector/system views) |
+| `render/planet-render.js` | World Engine procedural mesh adapter + renderer combined |
 | `render/colormap-texture.js` | Three.js DataTexture wrapper for WE biome colormaps |
 | `render/shaders.js` | WE ShaderMaterials (planet surface, lines, overlays, gas giant, clouds) |
 | `render/sun-shaders.js` | WE star/sun shaders (3D noise sphere, camera-facing glow) |
-| `render/renderer.js` | WE Three.js renderer (scene, camera, draw pipeline, overlays) |
 | `constants/astrophysics.js` | Star/planet physics data & functions |
 | `constants/data.js` | Static data (colors, animals, elements) |
 | `constants/colormap.js` | WE 64×64 RGBA biome colormap per planet type |
@@ -39,7 +38,7 @@ UI code stays in `src/UI/` and `src/UI.js`.
 
 Engine files under `src/engine/` are standalone — they must NOT import from `render/threeHost.js` or reference `App` directly. Rendering is wired externally via callbacks (see Callback Schema below). Only `main.js` imports both engine classes and Three.js rendering functions and bridges them.
 
-## Three Host (`src/engine/render/threeHost.js`)
+## Galaxy Render (`src/engine/render/galaxy-render.js`)
 
 Central rendering controller managing three view modes:
 
@@ -76,7 +75,7 @@ World Engine source files are now vendored directly into the project:
 - Gas giants: `createGasGiantMaterial({...})`
 - Sun shader: `generateSunSphereMaterial()`, `generateSunGlowGeometry()`, `createSunGlowMaterial()`
 
-## Engine Adapter (`src/engine/render/engineAdapter.js`)
+## Planet Render (`src/engine/render/planet-render.js`)
 
 Bridges the InfiniteGalaxies data model to the World Engine API:
 

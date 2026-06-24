@@ -1,5 +1,5 @@
 import { Galaxy } from '../engine/galaxy/galaxy.js';
-import { setClaimsVisible, getClaimsVisible } from '../engine/render/threeHost.js';
+import { setClaimsVisible, getClaimsVisible } from '../engine/render/galaxy-render.js';
 
 export function setupGalaxyGUI(galaxy) {
   let o = {

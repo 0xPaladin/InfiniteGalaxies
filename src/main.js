@@ -24,7 +24,7 @@ import { setupSectorGUI, getSystemInfo } from './UI/sectorUI.js';
 import { setupSystemGUI } from './UI/systemUI.js';
 import { setupPlanetGUI, getPlanetInfo } from './UI/planetUI.js';
 
-import { init as initThree, resizeView, setGalaxyView, setSectorView, setSystemView, setCrosshair, upgradeSystemPlanet, zoomToPlanet } from './engine/render/threeHost.js';
+import { init as initThree, resizeView, setGalaxyView, setSectorView, setSystemView, setCrosshair, upgradeSystemPlanet, zoomToPlanet } from './engine/render/galaxy-render.js';
 
 class App extends Component {
   constructor() {
