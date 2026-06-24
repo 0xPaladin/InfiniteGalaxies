@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { createPlanetSurfaceMaterial, createLineMaterial, createOverlayMaterial, createCloudMaterial, createGasGiantMaterial } from './shaders.js';
-import { generateVoronoiGeometry } from '../system/planet.js';
+import { generateVoronoiGeometry } from '../system/we-planet.js';
 import { rebuildColormapTexture } from './colormap-texture.js';
 import { generateSunSphereMaterial, generateSunGlowGeometry, createSunGlowMaterial } from './sun-shaders.js';
 import { GAS_GIANT_DEFAULTS, SUN_DEFAULTS, SHADER_DEFAULTS } from '../constants/defaults.js';

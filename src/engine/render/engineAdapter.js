@@ -7,7 +7,7 @@ import { rebuildColormapTexture } from './colormap-texture.js';
 import { createPlanetSurfaceMaterial, createGasGiantMaterial } from './shaders.js';
 import {
   setSeed, setN, setJitter, setPlanetType, setBarrenSubtype, generateMesh, quadGeometry,
-} from '../system/planet.js';
+} from '../system/we-planet.js';
 
 const LOD_CONFIG = {
   low: { N: 1000, sphereSegs: 12 },
