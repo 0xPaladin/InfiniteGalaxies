@@ -1,5 +1,13 @@
 import * as THREE from 'three';
-import * as WE from '../../../lib/world-engine.core.min.js';
+import {
+  SPECTRAL_COLORS, SPECTRAL_DEFAULTS, SUN_DEFAULTS,
+} from '../constants/defaults.js';
+import { generateSunSphereMaterial, generateSunGlowGeometry, createSunGlowMaterial } from './sun-shaders.js';
+import { rebuildColormapTexture } from './colormap-texture.js';
+import { createPlanetSurfaceMaterial, createGasGiantMaterial } from './shaders.js';
+import {
+  setSeed, setN, setJitter, setPlanetType, setBarrenSubtype, generateMesh, quadGeometry,
+} from '../system/planet.js';
 
 const LOD_CONFIG = {
   low: { N: 1000, sphereSegs: 12 },
@@ -23,15 +31,15 @@ const HOSTILE_ATMOS = ['Corrosive', 'Toxic', 'Crushing'];
 
 export function createStarGroup(starData, seed) {
   const spectralClass = starData.starClass || 'G';
-  const spectralColorHex = WE.SPECTRAL_COLORS[spectralClass] || '#ffffff';
+  const spectralColorHex = SPECTRAL_COLORS[spectralClass] || '#ffffff';
   const spectralColor = new THREE.Color(spectralColorHex);
 
-  const spectralOverrides = WE.SPECTRAL_DEFAULTS[spectralClass] || {};
-  const params = { ...WE.SUN_DEFAULTS, ...spectralOverrides, spectralColor };
+  const spectralOverrides = SPECTRAL_DEFAULTS[spectralClass] || {};
+  const params = { ...SUN_DEFAULTS, ...spectralOverrides, spectralColor };
 
   const group = new THREE.Group();
 
-  const sphereMat = WE.generateSunSphereMaterial(spectralColor);
+  const sphereMat = generateSunSphereMaterial(spectralColor);
   sphereMat.uniforms.uBrightness.value = params.sphereBrightness;
   sphereMat.uniforms.uNoiseScale.value = params.noiseScale;
   sphereMat.uniforms.uGlowPower.value = params.glowPower;
@@ -40,8 +48,8 @@ export function createStarGroup(starData, seed) {
   const sphereMesh = new THREE.Mesh(sphereGeom, sphereMat);
   group.add(sphereMesh);
 
-  const glowGeom = WE.generateSunGlowGeometry();
-  const glowMat = WE.createSunGlowMaterial({
+  const glowGeom = generateSunGlowGeometry();
+  const glowMat = createSunGlowMaterial({
     tint: params.glowTint,
     brightness: params.glowBrightness,
     falloffColor: params.glowFalloff,
@@ -51,8 +59,6 @@ export function createStarGroup(starData, seed) {
   const glowMesh = new THREE.Mesh(glowGeom, glowMat);
   glowMat.userData.baseRadius = params.glowRadius;
   group.add(glowMesh);
-
-  WE.updateSunParams(params);
 
   const state = {
     sphereMat, glowMat,
@@ -111,22 +117,20 @@ export function createPlanetMesh(planet, lod = 'medium') {
   const seedNum = planet.seed ? planet.seed.split('.').reduce((a, s) => a + s.charCodeAt(0), 0) : planet._seed ? planet._seed.split('').reduce((a, c) => a + c.charCodeAt(0), 0) : Date.now();
 
   const barrenSubtype = engineType === 'barren' && HOSTILE_ATMOS.includes(planet.atmosphere) ? 'hostile' : 'barren';
-  WE.setSeed(seedNum);
-  WE.setN(config.N);
-  WE.setJitter(0.5);
-  WE.setPlanetType(engineType);
-  WE.setBarrenSubtype(barrenSubtype);
-  WE.generateMesh();
-
-  const { quadGeometry } = WE;
+  setSeed(seedNum);
+  setN(config.N);
+  setJitter(0.5);
+  setPlanetType(engineType);
+  setBarrenSubtype(barrenSubtype);
+  generateMesh();
 
   const geom = new THREE.BufferGeometry();
   geom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(quadGeometry.xyz), 3));
   geom.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(quadGeometry.tm), 2));
   geom.setIndex(new THREE.BufferAttribute(new Uint32Array(quadGeometry.I), 1));
 
-  const colormapTex = WE.rebuildColormapTexture(engineType);
-  const mat = WE.createPlanetSurfaceMaterial();
+  const colormapTex = rebuildColormapTexture(engineType);
+  const mat = createPlanetSurfaceMaterial();
   mat.uniforms.u_colormap.value = colormapTex;
 
   const mesh = new THREE.Mesh(geom, mat);
@@ -163,22 +167,20 @@ export function upgradePlanetMesh(planetGroup, planet, onComplete) {
   const config = LOD_CONFIG.high;
   const barrenSubtype = engineType === 'barren' && planet && HOSTILE_ATMOS.includes(planet.atmosphere) ? 'hostile' : 'barren';
 
-  WE.setSeed(seedNum);
-  WE.setN(config.N);
-  WE.setJitter(0.75);
-  WE.setPlanetType(engineType);
-  WE.setBarrenSubtype(barrenSubtype);
-  WE.generateMesh();
-
-  const { quadGeometry } = WE;
+  setSeed(seedNum);
+  setN(config.N);
+  setJitter(0.75);
+  setPlanetType(engineType);
+  setBarrenSubtype(barrenSubtype);
+  generateMesh();
 
   const geom = new THREE.BufferGeometry();
   geom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(quadGeometry.xyz), 3));
   geom.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(quadGeometry.tm), 2));
   geom.setIndex(new THREE.BufferAttribute(new Uint32Array(quadGeometry.I), 1));
 
-  const colormapTex = WE.rebuildColormapTexture(engineType);
-  const mat = WE.createPlanetSurfaceMaterial();
+  const colormapTex = rebuildColormapTexture(engineType);
+  const mat = createPlanetSurfaceMaterial();
   mat.uniforms.u_colormap.value = colormapTex;
 
   const scale = oldMesh.scale.x;
@@ -222,7 +224,7 @@ function createGasGiantMesh(planet, config) {
   const colorB = toColor(gradient[1]?.[1]);
   const colorC = toColor(gradient[2]?.[1]);
 
-  const gasMat = WE.createGasGiantMaterial({
+  const gasMat = createGasGiantMaterial({
     scale: 1,
     turbulence: 2,
     blur: 0.5,
@@ -259,22 +261,20 @@ export function createMoonMesh(moon, lod = 'low') {
   const engineType = getPlanetEngineType(moon);
   const barrenSubtype = engineType === 'barren' && HOSTILE_ATMOS.includes(moon.atmosphere) ? 'hostile' : 'barren';
 
-  WE.setSeed(seedNum);
-  WE.setN(config.N);
-  WE.setJitter(0.3);
-  WE.setPlanetType(engineType);
-  WE.setBarrenSubtype(barrenSubtype);
-  WE.generateMesh();
-
-  const { quadGeometry } = WE;
+  setSeed(seedNum);
+  setN(config.N);
+  setJitter(0.3);
+  setPlanetType(engineType);
+  setBarrenSubtype(barrenSubtype);
+  generateMesh();
 
   const geom = new THREE.BufferGeometry();
   geom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(quadGeometry.xyz), 3));
   geom.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(quadGeometry.tm), 2));
   geom.setIndex(new THREE.BufferAttribute(new Uint32Array(quadGeometry.I), 1));
 
-  const colormapTex = WE.rebuildColormapTexture(engineType);
-  const mat = WE.createPlanetSurfaceMaterial();
+  const colormapTex = rebuildColormapTexture(engineType);
+  const mat = createPlanetSurfaceMaterial();
   mat.uniforms.u_colormap.value = colormapTex;
 
   const mesh = new THREE.Mesh(geom, mat);

@@ -13,18 +13,25 @@ All generation and Three.js rendering code lives under `src/engine/`:
 | ---- | ------- |
 | `render/threeHost.js` | Three.js rendering host (galaxy/sector/system views) |
 | `render/engineAdapter.js` | World Engine procedural mesh adapter |
+| `render/colormap-texture.js` | Three.js DataTexture wrapper for WE biome colormaps |
+| `render/shaders.js` | WE ShaderMaterials (planet surface, lines, overlays, gas giant, clouds) |
+| `render/sun-shaders.js` | WE star/sun shaders (3D noise sphere, camera-facing glow) |
+| `render/renderer.js` | WE Three.js renderer (scene, camera, draw pipeline, overlays) |
 | `constants/astrophysics.js` | Star/planet physics data & functions |
 | `constants/data.js` | Static data (colors, animals, elements) |
+| `constants/colormap.js` | WE 64×64 RGBA biome colormap per planet type |
+| `constants/defaults.js` | WE shared defaults (seeds, spectral colors, gas giant params) |
 | `peoples/cultures.js` | Culture generation (Game of Life) |
 | `peoples/factions.js` | Faction generation |
 | `peoples/people.js` | People/race generation |
+| `peoples/world-population.js` | WE population simulation (cultures, states, burgs, provinces) |
 | `region/region.js` | Region generation |
 | `poi.js` | Points of interest generation |
 | `random.js` | Random utilities |
 | `random_name.js` | Name generation |
 | `mixins.js` | Lodash mixins (`window._`) |
 | `galaxy/` | Galaxy (`galaxy.js`) and MajorSector (`sector.js`) classes |
-| `system/` | System (`starSystem.js`) and Planet/Moon (`planet.js`) |
+| `system/` | System (`starSystem.js`), Planets/Moons (`planet.js`), WE planet gen (`planet.js`), WE sphere mesh (`sphere-mesh.js`) |
 
 UI code stays in `src/UI/` and `src/UI.js`.
 
@@ -50,15 +57,24 @@ Resize (`resizeView()`) handles orthographic frustum recalculation for sector vi
 
 ## World Engine Integration
 
-Original repo: https://github.com/0xPaladin/world-engine
+World Engine source files are now vendored directly into the project:
 
-- Bundle at `lib/world-engine.core.min.js`
-- Import as: `import * as WE from '../../../lib/world-engine.core.min.js'`
+| Source | Location |
+| ------ | -------- |
+| Planet generation core (`planet.js`) | `src/engine/system/planet.js` |
+| Sphere mesh (`sphere-mesh.js`) | `src/engine/system/sphere-mesh.js` |
+| Shared defaults (`defaults.js`) | `src/engine/constants/defaults.js` |
+| Colormaps (`colormap.js`) | `src/engine/constants/colormap.js` |
+| Population simulation (`world-population.js`) | `src/engine/peoples/world-population.js` |
+| Shader materials (`shaders.js`, `sun-shaders.js`) | `src/engine/render/` |
+| Renderer (`renderer.js`, `colormap-texture.js`) | `src/engine/render/` |
+| Vendor libs (`redblob.lib.js`, `aleaPRNG-1.1.js`) | `lib/` |
+
 - Uses singleton state (`mesh`, `map`, `quadGeometry`) — generate one planet at a time
 - Requires Three.js importmap in index.html (three@0.184.0)
-- `WE.setSeed(n)`, `WE.setN(n)`, `WE.setPlanetType(str)`, `WE.generateMesh()`, `WE.rebuildColormapTexture(type)`, `WE.createPlanetSurfaceMaterial()`
-- Gas giants: `WE.createGasGiantMaterial({...})`
-- Sun shader: `WE.generateSunSphereMaterial()`, `WE.generateSunGlowGeometry()`, `WE.createSunGlowMaterial()`, `WE.updateSunParams()`
+- `setSeed(n)`, `setN(n)`, `setPlanetType(str)`, `generateMesh()`, `rebuildColormapTexture(type)`, `createPlanetSurfaceMaterial()`
+- Gas giants: `createGasGiantMaterial({...})`
+- Sun shader: `generateSunSphereMaterial()`, `generateSunGlowGeometry()`, `createSunGlowMaterial()`
 
 ## Engine Adapter (`src/engine/render/engineAdapter.js`)
 
@@ -70,7 +86,7 @@ Bridges the InfiniteGalaxies data model to the World Engine API:
 | `createPlanetMesh(planet, lod)`         | Generates planet mesh at specified LOD using WE procedural terrain. Returns `THREE.Group` with planet mesh + glow sprite          |
 | `upgradePlanetMesh(group, planet, cb)`  | Regenerates planet mesh at N=20000 (high), swaps geometry/material, disposes old resources                                        |
 | `createMoonMesh(moon, lod)`             | Moon at specified LOD (default low). Generates as `airless` type                                                                  |
-| `createGasGiantMesh(planet, config)`    | Gas giant with `WE.createGasGiantMaterial()` using `_gradient` colors from `System.setGradients()`                                |
+| `createGasGiantMesh(planet, config)`    | Gas giant with `createGasGiantMaterial()` using `_gradient` colors from `System.setGradients()`                                   |
 | `createPlanetGlowSprite(color, radius)` | Radial gradient sprite for atmospheric glow                                                                                       |
 | `disposeStarGroup(group)`               | Disposes all materials and geometries in `__starState`                                                                            |
 | `disposePlanetGroup(group)`             | Disposes mesh, glow sprite, colormap texture                                                                                      |
@@ -92,7 +108,7 @@ Bridges the InfiniteGalaxies data model to the World Engine API:
 | HI 1–2                  | `earthlike`                                                    |
 | HI 3–4                  | `barren`                                                       |
 | HI 5+                   | `airless`                                                      |
-| gas giant / brown dwarf | `gasgiant` (procedural shader via `WE.createGasGiantMaterial`) |
+| gas giant / brown dwarf | `gasgiant` (procedural shader via `createGasGiantMaterial`) |
 
 ## Engine Design Constraints
 

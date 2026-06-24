@@ -1,6 +1,6 @@
 # Infinite Galaxies
 
-Procedural generation of an entire galaxy, rendered in 3D with Three.js and World Engine procedural terrain.
+Procedural generation of an entire galaxy, rendered in 3D with Three.js and procedural terrain via the World Engine.
 
 ## Galaxies
 
@@ -45,7 +45,7 @@ System inputs:
 
 ## Systems
 
-The individual star systems that make up the galaxy. Each has its primary star (rendered with a procedural sun shader — sphere, rays, flares, and glow via the World Engine) and a row of planets with their own moons generated using World Engine terrain meshes.
+The individual star systems that make up the galaxy. Each has its primary star (rendered with a procedural sun shader — sphere, rays, flares, and glow) and a row of planets with their own moons generated using World Engine terrain meshes.
 
 Planets are visible at medium LOD (N=3000). Clicking a planet upgrades its mesh to high detail (N=20000) and zooms the camera for close inspection. Planets have classification-based visual types: earthlike, barren, airless, and gas giants (with a procedural banded shader).
 
@@ -109,4 +109,4 @@ The `UI/` directory contains lil-gui setup functions that read/write engine obje
 
 ## Dependencies
 
-Three.js via CDN importmap (`three@0.184.0`), World Engine for procedural terrain and sun shaders, Chance.js for seeded random generation, lil-gui for the control panel. All rendering is 3D WebGL.
+Three.js via CDN importmap (`three@0.184.0`), World Engine (vendored at `src/engine/`) for procedural terrain and sun shaders, Chance.js for seeded random generation, lil-gui for the control panel. All rendering is 3D WebGL.
