@@ -16,7 +16,9 @@ Galaxies have the following inputs:
 
 **You have to press *update* to make any changes to the galaxy. You have to press *save* to save your changes so the galaxy is available after you reload the page.**
 
-If you save your galaxy, when you come back you can select the galaxy seed from the dropdown on the right to load your saved work. If you modify any systems, they will be saved as well and you can go directly to them by selecting them from the dropdown as well.
+Only the galaxy has a Save button. Sectors and Systems have **To Save** checkboxes — checking one flags that object for inclusion when the galaxy is saved. The galaxy save recursively collects all flagged sectors and systems.
+
+If you save your galaxy, when you come back you can select the galaxy seed from the dropdown on the right to load your saved work. Flagged sectors and systems will also appear in the load dropdowns.
 
 You can click anywhere on the galaxy to select individual sectors. Their ID appears in the "Sector Select" folder of the GUI. A crosshair marks the selected sector.
 
@@ -34,7 +36,7 @@ Sectors have the following inputs:
 
 ![sector view](docs/sector.png)
 
-Click the save button to save changes you made to a particular sector. This automatically saves the galaxy as well. You will be able to select the sector from the main galaxy page on reload.
+Use the **To Save** checkbox to flag this sector for inclusion when the galaxy is saved. Checked sectors appear in the load dropdown on the main galaxy page after reload.
 
 You can click on any star to get information about the system. Information will display on the top left, and you can edit various attributes in the bottom right of the GUI.
 
@@ -57,7 +59,7 @@ System inputs:
 
 ![system view](docs/system_system.png)
 
-Click the save button to save changes you made to the system. This automatically saves the galaxy as well. You will be able to select the system from the main galaxy page on reload.
+Use the **To Save** checkbox to flag this system for inclusion when the galaxy is saved. Checked systems appear in the load dropdown on the main galaxy page after reload.
 
 If you click on any planet or moon you can view their information (top left), upgrade the mesh to full detail, zoom into a close-up view, and edit some of their attributes in the GUI.
 
@@ -77,7 +79,7 @@ The codebase is split into two layers:
 
 ### Engine (`src/engine/`)
 
-All data generation lives here — no UI dependencies, no Three.js imports, no `App` references. Each class creates and manages its own domain objects:
+All data generation lives here — no UI dependencies, no `App` references. Each class creates and manages its own domain objects:
 
 - `Galaxy` — spiral galaxy with cultures, sectors map
 - `MajorSector` — 1000 ly³ region containing star systems
@@ -93,6 +95,8 @@ save()    → this._save(this.data)
 ```
 
 Child classes inherit callbacks from their parent — `MajorSector.refresh()` passes its `_onClick`/`_display` to every `new System()` it creates.
+
+World Engine terrain generation is vendored at `src/engine/system/we-planet.js` and `src/engine/render/planet-shaders.js`. The `Planetoid` base class encapsulates WE calls via its `generatePlanet()` method, keeping planet-render.js free of direct WE singleton state management.
 
 ### App Layer (`main.js`)
 

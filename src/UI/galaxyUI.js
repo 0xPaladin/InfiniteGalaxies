@@ -21,13 +21,17 @@ export function setupGalaxyGUI(galaxy) {
       App.DB.setItem(galaxy.seed, App.active);
     },
     viewSector() {
-      App.getSector(this.x, this.y, this.z);
+      let x = galaxy._sectorX != null ? galaxy._sectorX : this.x;
+      let y = galaxy._sectorY != null ? galaxy._sectorY : this.y;
+      let z = galaxy._sectorZ != null ? galaxy._sectorZ : this.z;
+      App.getSector(x, y, z);
     },
     update() {
       App.galaxy = new Galaxy(this);
       App.galaxy.app = App;
       App._bindGalaxyCallbacks(App.galaxy);
       App.galaxy.display();
+      setupGalaxyGUI(App.galaxy);
     }
   };
 
@@ -61,4 +65,5 @@ export function setupGalaxyGUI(galaxy) {
 
   let fs = f.addFolder('Sector Select');
   o._view = fs.add(o, 'viewSector').name('View Sector');
+  galaxy._viewBtn = o._view;
 }

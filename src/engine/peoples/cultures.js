@@ -1,3 +1,5 @@
+import { Faction } from './factions.js';
+
 const randColor = (PRNG) => {
     let h = PRNG.randBetween(0, 360);  // Hue
     let s = PRNG.randBetween(30, 100); //saturation, avoiding very pale 
@@ -74,6 +76,8 @@ export class Cultures {
         for (let i = 0; i < steps; i++) {
             this.step();
         }
+
+        this._factions = this._cultures.map((c, i) => new Faction(this, { culture: i, color: this._colors[i] }));
     }
 
     get countCells() {
@@ -82,6 +86,10 @@ export class Cultures {
 
     get inhabited() {
         return [...this._cells.values()].filter(c => c._claims.length > 0);
+    }
+
+    get contested() {
+        return this.inhabited.filter(c => c._claims.length > 1);
     }
 
     get alive() {
@@ -103,6 +111,7 @@ export class Cultures {
                         lastAct: this._lastAct[cid],
                         color: this._colors[cid],
                         cells: [c],
+                        faction: this._factions[cid],
                         //helper function to determine if culture is active/alive
                         get isAlive() {
                             return this.active.length > 0

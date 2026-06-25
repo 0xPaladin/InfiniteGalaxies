@@ -1,8 +1,17 @@
 // Shader materials: colormap surface, lines, overlays, gas giant, clouds
 import * as THREE from 'three';
-import { SimplexNoise } from '../../lib/redblob.lib.js';
-import colormapTexture from './colormap-texture.js';
-import aleaPRNG from '../../lib/aleaPRNG-1.1.js';
+import { SimplexNoise } from '../../../lib/redblob.lib.js';
+import aleaPRNG from '../../../lib/aleaPRNG-1.1.js';
+import { data as colormapData, width, height } from '../constants/colormap.js';
+
+
+const defaultColormapTexture = new THREE.DataTexture(colormapData, width, height, THREE.RGBAFormat);
+defaultColormapTexture.wrapS = THREE.ClampToEdgeWrapping;
+defaultColormapTexture.wrapT = THREE.ClampToEdgeWrapping;
+defaultColormapTexture.magFilter = THREE.NearestFilter;
+defaultColormapTexture.minFilter = THREE.NearestFilter;
+defaultColormapTexture.needsUpdate = true;
+
 
 const planetVertexShader = `
 varying vec2 v_tm;
@@ -42,7 +51,7 @@ void main() {
 export function createPlanetSurfaceMaterial() {
     return new THREE.ShaderMaterial({
         uniforms: {
-            u_colormap: { value: colormapTexture },
+            u_colormap: { value: defaultColormapTexture },
             u_light_angle: { value: new THREE.Vector2(Math.cos(Math.PI / 3), Math.sin(Math.PI / 3)) },
             u_inverse_texture_size: { value: 1.0 / 2048 },
             u_d: { value: 60 },
@@ -344,9 +353,9 @@ export function createCloudMaterial(seed) {
 
             const v = Math.floor(n * 255);
             data[i] = v;
-            data[i+1] = v;
-            data[i+2] = v;
-            data[i+3] = 255;
+            data[i + 1] = v;
+            data[i + 2] = v;
+            data[i + 3] = 255;
         }
     }
 

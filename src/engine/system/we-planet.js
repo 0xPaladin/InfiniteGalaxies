@@ -1,11 +1,10 @@
 // Planet generation core: mesh gen, plates, elevation, rivers, climate, colormap
-import { SimplexNoise, FlatQueue, vec3 } from '../../lib/redblob.lib.js';
-import aleaPRNG from '../../lib/aleaPRNG-1.1.js';
-import { makeSphere } from './sphere-mesh.js';
+import { SimplexNoise, FlatQueue, vec3 } from '../../../lib/redblob.lib.js';
+import aleaPRNG from '../../../lib/aleaPRNG-1.1.js';
+import { makeSphere } from '../constants/sphere-mesh.js';
 import {
     DEFAULT_SEED, DEFAULT_N, DEFAULT_P, DEFAULT_JITTER, DEFAULT_ROTATION,
     DEFAULT_DRAW_MODE, DEFAULT_PLANET_TYPE, DEFAULT_BARREN_SUBTYPE,
-    DEFAULT_TEMP_OFFSET, DEFAULT_RAIN_OFFSET, DEFAULT_WATER_LEVEL,
     DEFAULT_DRAW_PLATE_VECTORS, DEFAULT_DRAW_PLATE_BOUNDARIES,
     DEFAULT_DRAW_CULTURE_OVERLAY, DEFAULT_DRAW_STATE_BORDERS,
     DEFAULT_DRAW_STATE_OVERLAY, DEFAULT_DRAW_PROVINCE_OVERLAY,
@@ -13,22 +12,13 @@ import {
     COLLISION_THRESHOLD,
 } from '../constants/defaults.js';
 
-let _seed = DEFAULT_SEED;
-
-let N = DEFAULT_N;
-let P = DEFAULT_P;
-let jitter = DEFAULT_JITTER;
+let _randomNoise;
 let rotation = DEFAULT_ROTATION;
 let drawMode = DEFAULT_DRAW_MODE;
 let draw_plateVectors = DEFAULT_DRAW_PLATE_VECTORS;
 let draw_plateBoundaries = DEFAULT_DRAW_PLATE_BOUNDARIES;
-let tempOffset = DEFAULT_TEMP_OFFSET;
-let rainOffset = DEFAULT_RAIN_OFFSET;
-let waterLevel = DEFAULT_WATER_LEVEL;
 let _planetType = DEFAULT_PLANET_TYPE;
 let _barrenSubtype = DEFAULT_BARREN_SUBTYPE;
-
-let _randomNoise = new SimplexNoise(aleaPRNG(_seed));
 const persistence = 2 / 3;
 const amplitudes = Array.from({ length: 5 }, (_, octave) => Math.pow(persistence, octave));
 
@@ -171,16 +161,17 @@ function pickRandomRegions(mesh, N, randInt) {
 
 
 // Assign each region to a tectonic plate via seeded random expansion from plate centers
-function generatePlates(mesh, r_xyz) {
+function generatePlates(mesh, r_xyz, params) {
+    let { seed = DEFAULT_SEED, nPlates = DEFAULT_P, N = DEFAULT_N } = params || {};
     let r_plate = new Int32Array(mesh.numRegions);
     r_plate.fill(-1);
-    let grng = aleaPRNG(_seed);
+    let grng = aleaPRNG(seed);
     let grandInt = (n) => Math.floor(grng() * n);
-    let plate_r = pickRandomRegions(mesh, Math.min(P, N), grandInt);
+    let plate_r = pickRandomRegions(mesh, Math.min(nPlates, N), grandInt);
     let queue = Array.from(plate_r);
     for (let r of queue) { r_plate[r] = r; }
     let out_r = [];
-    let randInt = (n) => Math.floor(aleaPRNG(_seed)() * n);
+    let randInt = (n) => Math.floor(aleaPRNG(seed)() * n);
 
     for (let queue_out = 0; queue_out < queue.length; queue_out++) {
         let pos = queue_out + randInt(queue.length - queue_out);
@@ -208,11 +199,11 @@ function generatePlates(mesh, r_xyz) {
 
 
 // BFS distance from seeds_r outward, stopping at stop_r boundaries (uses shuffled order)
-function assignDistanceField(mesh, seeds_r, stop_r) {
+function assignDistanceField(mesh, seeds_r, stop_r, seed = DEFAULT_SEED) {
     let { numRegions } = mesh;
     let r_distance = new Float32Array(numRegions);
     r_distance.fill(Infinity);
-    let rng = aleaPRNG(_seed);
+    let rng = aleaPRNG(seed);
     let randInt = (n) => Math.floor(rng() * n);
 
     let queue = [];
@@ -281,7 +272,7 @@ function findCollisions(mesh, r_xyz, plate_is_ocean, r_plate, plate_vec) {
 
 
 // Compute elevation per region from plate collisions; uses 3 distance fields + FBM noise
-function assignRegionElevation(mesh, { r_xyz, plate_is_ocean, r_plate, plate_vec, /* out */ r_elevation }) {
+function assignRegionElevation(mesh, { r_xyz, plate_is_ocean, r_plate, plate_vec, /* out */ r_elevation }, seed = DEFAULT_SEED) {
     const epsilon = 1e-3;
     let { numRegions } = mesh;
 
@@ -299,9 +290,9 @@ function assignRegionElevation(mesh, { r_xyz, plate_is_ocean, r_plate, plate_vec
     for (let r of coastline_r) { stop_r.add(r); }
     for (let r of ocean_r) { stop_r.add(r); }
 
-    let r_distance_a = assignDistanceField(mesh, mountain_r, ocean_r);
-    let r_distance_b = assignDistanceField(mesh, ocean_r, coastline_r);
-    let r_distance_c = assignDistanceField(mesh, coastline_r, stop_r);
+    let r_distance_a = assignDistanceField(mesh, mountain_r, ocean_r, seed);
+    let r_distance_b = assignDistanceField(mesh, ocean_r, coastline_r, seed);
+    let r_distance_c = assignDistanceField(mesh, coastline_r, stop_r, seed);
 
     for (let r = 0; r < numRegions; r++) {
         let a = r_distance_a[r] + epsilon,
@@ -398,10 +389,11 @@ var mesh, map = {};
 var quadGeometry = new QuadGeometry();
 
 // Full mesh + map generation: create sphere, allocate map arrays, dispatch to type-specific generator
-function generateMesh() {
+function generateMesh(params = {}) {
+    const { seed = DEFAULT_SEED, N = DEFAULT_N, nPlates = DEFAULT_P, jitter = DEFAULT_JITTER } = params;
     let t0 = performance.now();
-    _randomNoise = new SimplexNoise(aleaPRNG(_seed));
-    let result = makeSphere(N, jitter, aleaPRNG(_seed));
+    _randomNoise = new SimplexNoise(aleaPRNG(seed));
+    let result = makeSphere(N, jitter, aleaPRNG(seed));
     mesh = result.mesh;
     quadGeometry.setMesh(mesh);
 
@@ -416,54 +408,146 @@ function generateMesh() {
 
     map.r_xyz = result.r_xyz;
     map.t_xyz = generateTriangleCenters(mesh, map);
-    generateMap();
+    generateMap(params);
 }
 
 // Dispatch to planet-type-specific map generation
-function generateMap() {
+function generateMap(params = {}) {
     switch (_planetType) {
-        case 'airless': return generateAirlessMap();
+        case 'airless': return generateAirlessMap(params);
+        case 'star':
+        case 'sun': return generateSunMap(params);
+        case 'rocky':
+        case 'earthlike':
         case 'barren':
-            if (_barrenSubtype === 'hostile') return generateHostileMap();
-            return generateBarrenMap();
-        case 'gasgiant': return generateGasGiantMap();
-        case 'sun': return generateSunMap();
-        default: return generateEarthlikeMap();
+        default: {
+            const subtype = _planetType === 'rocky' ? _barrenSubtype : _planetType;
+            return generateRockyMap(getRockyOptions(subtype), params);
+        }
     }
 }
 
-// Earth-like: plates, 50% ocean, collision elevation, FBM moisture &gt;0.15, rivers, quad geometry
-function generateEarthlikeMap() {
-    let result = generatePlates(mesh, map.r_xyz);
+function getRockyOptions(subtype) {
+    switch (subtype) {
+        case 'hostile':
+            return { oceanFraction: 0, moistureMin: 0, moistureMax: 0, hasRivers: false, hasDomes: true, hasVolcanoes: false };
+        case 'barren':
+            return { oceanFraction: 0, moistureMin: 0, moistureMax: 0.15, hasRivers: false, hasVolcanoes: true, hasDomes: false };
+        default:
+            return { oceanFraction: 0.5, moistureMin: 0.15, moistureMax: 1.0, hasRivers: true, hasVolcanoes: false, hasDomes: false };
+    }
+}
+
+// Parameterized rocky planet: plates, collision elevation, optional volcanoes/domes/moisture/rivers
+function generateRockyMap(opts = {}, params = {}) {
+    const {
+        oceanFraction = 0.5,
+        moistureMin = 0.15,
+        moistureMax = 1.0,
+        hasRivers = true,
+        hasVolcanoes = false,
+        hasDomes = false,
+    } = opts;
+
+    const {
+        seed = DEFAULT_SEED,
+        nPlates = DEFAULT_P,
+        N = DEFAULT_N,
+        waterLevel: waterOff = 0,
+        tempOffset: tempOff = 0,
+        rainOffset: rainOff = 0,
+    } = params;
+
+    let result = generatePlates(mesh, map.r_xyz, { seed, nPlates, N });
     map.plate_r = result.plate_r;
     map.r_plate = result.r_plate;
     map.plate_vec = result.plate_vec;
     map.plate_is_ocean = new Set();
     for (let r of map.plate_r) {
-        if (Math.floor(aleaPRNG(r)() * 10) < 5) {
+        if (Math.floor(aleaPRNG(r)() * 10) / 10 < oceanFraction) {
             map.plate_is_ocean.add(r);
         }
     }
-    assignRegionElevation(mesh, map);
+    assignRegionElevation(mesh, map, seed);
+
+    if (hasVolcanoes) {
+        let rng = aleaPRNG(seed + 7777);
+        for (let center_r of map.plate_r) {
+            if (rng() > 0.4) continue;
+            let volcanoStrength = 1.5 + rng() * 1.5;
+            map.r_elevation[center_r] *= volcanoStrength;
+            let out_r = [];
+            mesh.r_circulate_r(out_r, center_r);
+            for (let nr of out_r) {
+                map.r_elevation[nr] *= 1.0 + (volcanoStrength - 1.0) * 0.5;
+            }
+        }
+    }
+
+    if (hasDomes) {
+        let rng = aleaPRNG(seed + 8888);
+        let out_r = [];
+        for (let center_r of map.plate_r) {
+            if (rng() > 0.3) continue;
+            let domeHeight = 0.3 + rng() * 0.5;
+            let spread = 2 + Math.floor(rng() * 4);
+            let queue_domes = [center_r];
+            let visited = new Set();
+            visited.add(center_r);
+            for (let i = 0; i < queue_domes.length && i < spread * 10; i++) {
+                let current_r = queue_domes[i];
+                map.r_elevation[current_r] += domeHeight * (1 - i / (spread * 10));
+                mesh.r_circulate_r(out_r, current_r);
+                for (let nr of out_r) {
+                    if (!visited.has(nr) && queue_domes.length < spread * 10) {
+                        visited.add(nr);
+                        queue_domes.push(nr);
+                    }
+                }
+            }
+        }
+    }
+
     for (let r = 0; r < mesh.numRegions; r++) {
         let n = 0.5 + 0.5 * fbm_noise(map.r_xyz[3 * r], map.r_xyz[3 * r + 1], map.r_xyz[3 * r + 2]);
-        map.r_moisture[r] = Math.max(0.15, Math.min(1, n));
+        if (moistureMin === moistureMax) {
+            map.r_moisture[r] = moistureMin;
+        } else {
+            map.r_moisture[r] = Math.max(moistureMin, Math.min(moistureMax, n));
+        }
     }
+
     assignTriangleValues(mesh, map);
-    assignDownflow(mesh, map);
-    assignFlow(mesh, map);
+
+    if (hasRivers) {
+        assignDownflow(mesh, map);
+        assignFlow(mesh, map);
+    } else {
+        map.t_downflow_s.fill(-999);
+        map.order_t.fill(0);
+        map.t_flow.fill(0);
+        map.s_flow.fill(0);
+    }
 
     quadGeometry.setMap(mesh, map);
+
+    if (tempOff !== 0 || rainOff !== 0 || waterOff !== 0) {
+        quadGeometry.applyClimate(
+            mesh.numRegions, mesh.numTriangles,
+            map.r_elevation, map.r_moisture, map.t_elevation, map.t_moisture,
+            tempOff, rainOff, waterOff
+        );
+    }
 }
 
 // Generate cratered elevation: 30–70 bowl+rim+ejecta craters on FBM baseline, normalized to [-0.8, 0.8]
-function generateCraterElevation(mesh, r_xyz) {
+function generateCraterElevation(mesh, r_xyz, seed = DEFAULT_SEED) {
     const numRegions = mesh.numRegions;
     const elevation = new Float32Array(numRegions);
-    let rng = aleaPRNG(_seed + 9999);
+    let rng = aleaPRNG(seed + 9999);
 
     for (let r = 0; r < numRegions; r++) {
-        elevation[r] = 0.15 * fbm_noise(r_xyz[3*r], r_xyz[3*r+1], r_xyz[3*r+2]);
+        elevation[r] = 0.15 * fbm_noise(r_xyz[3 * r], r_xyz[3 * r + 1], r_xyz[3 * r + 2]);
     }
 
     const numCraters = 30 + Math.floor(rng() * 40);
@@ -483,7 +567,7 @@ function generateCraterElevation(mesh, r_xyz) {
         const outerCos = Math.cos(craterRadius * 1.4);
 
         for (let r = 0; r < numRegions; r++) {
-            const dot = cx * r_xyz[3*r] + cy * r_xyz[3*r+1] + cz * r_xyz[3*r+2];
+            const dot = cx * r_xyz[3 * r] + cy * r_xyz[3 * r + 1] + cz * r_xyz[3 * r + 2];
             if (dot < outerCos) continue;
 
             if (dot < rimCos) {
@@ -515,14 +599,21 @@ function generateCraterElevation(mesh, r_xyz) {
 }
 
 // Airless: single flat plate, crater elevation, zero moisture, no rivers
-function generateAirlessMap() {
+function generateAirlessMap(params = {}) {
+    const {
+        seed = DEFAULT_SEED,
+        waterLevel: waterOff = 0,
+        tempOffset: tempOff = 0,
+        rainOffset: rainOff = 0,
+    } = params;
+
     map.plate_r = [0];
     map.r_plate = new Int32Array(mesh.numRegions);
     map.r_plate.fill(0);
     map.plate_vec = [vec3.fromValues(0, 0, 0)];
     map.plate_is_ocean = new Set();
 
-    map.r_elevation = generateCraterElevation(mesh, map.r_xyz);
+    map.r_elevation = generateCraterElevation(mesh, map.r_xyz, seed);
     map.r_moisture.fill(0);
 
     for (let t = 0; t < mesh.numTriangles; t++) {
@@ -540,135 +631,22 @@ function generateAirlessMap() {
     map.s_flow.fill(0);
 
     quadGeometry.setMap(mesh, map);
+
+    if (tempOff !== 0 || rainOff !== 0 || waterOff !== 0) {
+        quadGeometry.applyClimate(
+            mesh.numRegions, mesh.numTriangles,
+            map.r_elevation, map.r_moisture, map.t_elevation, map.t_moisture,
+            tempOff, rainOff, waterOff
+        );
+    }
 }
 
-// Barren: plate collision + volcano boost on 40% of plate centers, trace moisture with polar ice
-function generateBarrenMap() {
-    let result = generatePlates(mesh, map.r_xyz);
-    map.plate_r = result.plate_r;
-    map.r_plate = result.r_plate;
-    map.plate_vec = result.plate_vec;
-    map.plate_is_ocean = new Set();
 
-    assignRegionElevation(mesh, map);
-
-    let rng = aleaPRNG(_seed + 7777);
-    for (let center_r of map.plate_r) {
-        if (rng() > 0.4) continue;
-        let volcanoStrength = 1.5 + rng() * 1.5;
-        map.r_elevation[center_r] *= volcanoStrength;
-        let out_r = [];
-        mesh.r_circulate_r(out_r, center_r);
-        for (let nr of out_r) {
-            map.r_elevation[nr] *= 1.0 + (volcanoStrength - 1.0) * 0.5;
-        }
-    }
-
-    for (let r = 0; r < mesh.numRegions; r++) {
-        let lat = Math.asin(map.r_xyz[3 * r + 1]);
-        let polarFactor = Math.max(0, 1 - Math.abs(lat) / (Math.PI / 6));
-        let n = 0.5 + 0.5 * fbm_noise(map.r_xyz[3 * r], map.r_xyz[3 * r + 1], map.r_xyz[3 * r + 2]);
-        map.r_moisture[r] = Math.min(0.15, n * polarFactor);
-    }
-
-    for (let t = 0; t < mesh.numTriangles; t++) {
-        let s0 = 3 * t;
-        let r1 = mesh.s_begin_r(s0),
-            r2 = mesh.s_begin_r(s0 + 1),
-            r3 = mesh.s_begin_r(s0 + 2);
-        map.t_elevation[t] = (map.r_elevation[r1] + map.r_elevation[r2] + map.r_elevation[r3]) / 3;
-        map.t_moisture[t] = (map.r_moisture[r1] + map.r_moisture[r2] + map.r_moisture[r3]) / 3;
-    }
-
-    map.t_downflow_s.fill(-999);
-    map.order_t.fill(0);
-    map.t_flow.fill(0);
-    map.s_flow.fill(0);
-
-    quadGeometry.setMap(mesh, map);
-}
-
-// Hostile barren: 1.5x plates, volcanic dome elevation constructs, zero moisture, no rivers
-function generateHostileMap() {
-    let savedP = P;
-    P = Math.round(P * 1.5);
-    let result = generatePlates(mesh, map.r_xyz);
-    P = savedP;
-    map.plate_r = result.plate_r;
-    map.r_plate = result.r_plate;
-    map.plate_vec = result.plate_vec;
-    map.plate_is_ocean = new Set();
-
-    assignRegionElevation(mesh, map);
-
-    let rng = aleaPRNG(_seed + 8888);
-    let out_r = [];
-    for (let center_r of map.plate_r) {
-        if (rng() > 0.3) continue;
-        let domeHeight = 0.3 + rng() * 0.5;
-        let spread = 2 + Math.floor(rng() * 4);
-        let queue_domes = [center_r];
-        let visited = new Set();
-        visited.add(center_r);
-        for (let i = 0; i < queue_domes.length && i < spread * 10; i++) {
-            let current_r = queue_domes[i];
-            map.r_elevation[current_r] += domeHeight * (1 - i / (spread * 10));
-            mesh.r_circulate_r(out_r, current_r);
-            for (let nr of out_r) {
-                if (!visited.has(nr) && queue_domes.length < spread * 10) {
-                    visited.add(nr);
-                    queue_domes.push(nr);
-                }
-            }
-        }
-    }
-
-    map.r_moisture.fill(0);
-
-    for (let t = 0; t < mesh.numTriangles; t++) {
-        let s0 = 3 * t;
-        let r1 = mesh.s_begin_r(s0),
-            r2 = mesh.s_begin_r(s0 + 1),
-            r3 = mesh.s_begin_r(s0 + 2);
-        map.t_elevation[t] = (map.r_elevation[r1] + map.r_elevation[r2] + map.r_elevation[r3]) / 3;
-        map.t_moisture[t] = 0;
-    }
-
-    map.t_downflow_s.fill(-999);
-    map.order_t.fill(0);
-    map.t_flow.fill(0);
-    map.s_flow.fill(0);
-
-    quadGeometry.setMap(mesh, map);
-}
-
-// Gas giant: zero elevation/moisture everywhere, single flat plate — visual via procedural shader
-function generateGasGiantMap() {
-    map.plate_r = [0];
-    map.r_plate = new Int32Array(mesh.numRegions);
-    map.r_plate.fill(0);
-    map.plate_vec = [vec3.fromValues(0, 0, 0)];
-    map.plate_is_ocean = new Set();
-
-    map.r_elevation.fill(0);
-    map.r_moisture.fill(0);
-
-    for (let t = 0; t < mesh.numTriangles; t++) {
-        map.t_elevation[t] = 0;
-        map.t_moisture[t] = 0;
-    }
-
-    map.t_downflow_s.fill(-999);
-    map.order_t.fill(0);
-    map.t_flow.fill(0);
-    map.s_flow.fill(0);
-
-    quadGeometry.setMap(mesh, map);
-}
 
 // Sun: uniform 0.5 elevation, zero moisture, single flat plate — visual via 4D simplex shader
-function generateSunMap() {
-    map._sunSeed = _seed;
+function generateSunMap(params = {}) {
+    const { seed = DEFAULT_SEED } = params;
+    map._sunSeed = seed;
     map.plate_r = [0];
     map.r_plate = new Int32Array(mesh.numRegions);
     map.r_plate.fill(0);
@@ -698,14 +676,6 @@ let draw_provinceOverlay = DEFAULT_DRAW_PROVINCE_OVERLAY;
 let draw_provinceBorders = DEFAULT_DRAW_PROVINCE_BORDERS;
 let draw_burgOverlay = DEFAULT_DRAW_BURG_OVERLAY;
 
-export function getSeed() { return _seed; }
-export function setSeed(v) { _seed = v; }
-export function getN() { return N; }
-export function setN(v) { N = v; }
-export function getP() { return P; }
-export function setP(v) { P = v; }
-export function getJitter() { return jitter; }
-export function setJitter(v) { jitter = v; }
 export function getRotation() { return rotation; }
 export function setRotation(v) { rotation = v; }
 export function getDrawMode() { return drawMode; }
@@ -714,12 +684,6 @@ export function getDrawPlateVectors() { return draw_plateVectors; }
 export function setDrawPlateVectors(v) { draw_plateVectors = v; }
 export function getDrawPlateBoundaries() { return draw_plateBoundaries; }
 export function setDrawPlateBoundaries(v) { draw_plateBoundaries = v; }
-export function getTempOffset() { return tempOffset; }
-export function setTempOffset(v) { tempOffset = v; }
-export function getRainOffset() { return rainOffset; }
-export function setRainOffset(v) { rainOffset = v; }
-export function getWaterLevel() { return waterLevel; }
-export function setWaterLevel(v) { waterLevel = v; }
 export function getDrawCultureOverlay() { return draw_cultureOverlay; }
 export function setDrawCultureOverlay(v) { draw_cultureOverlay = v; }
 export function getDrawStateBorders() { return draw_stateBorders; }
@@ -744,6 +708,6 @@ export {
     fbm_noise, generateTriangleCenters, generateVoronoiGeometry,
     generatePlates, assignRegionElevation,
     assignTriangleValues, assignDownflow, assignFlow,
-    generateMesh, generateMap,
+    generateMesh, generateMap, generateRockyMap,
     draw_stateOverlay, draw_provinceOverlay, draw_provinceBorders,
 };

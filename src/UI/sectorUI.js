@@ -1,40 +1,40 @@
 import { MajorSector } from '../engine/galaxy/sector.js';
 import { System } from '../engine/system/starSystem.js';
+import { setupGalaxyGUI } from './galaxyUI.js';
 
 export function setupSectorGUI(sector) {
   let o = {
     s: sector,
-    seed: sector._seed,
     filter: "All",
     ns: sector._ns,
     update() {
       let _id = this.s.id.join();
-      let opts = { id: this.s.id, seed: this.seed, ns: this.ns, galaxy: App.galaxy, saved: App.active[_id] || {} };
+      let opts = { id: this.s.id, ns: this.ns, galaxy: App.galaxy };
       App.active[_id] = opts;
       App.sector = new MajorSector(opts);
       App._bindSectorCallbacks(App.sector);
-      App.sector.refresh(-1, App.active);
+      App.sector.refresh(-1);
       App.sector.display();
       setupSectorGUI(App.sector);
     },
-    save() {
-      App.galaxy.save();
-    },
     viewGalaxy() {
       App.galaxy.display();
+      App.updateState("info", "");
+      setupGalaxyGUI(App.galaxy);
     },
     viewSystem() {
-      this.s.selectedSystem.display();
+      let system = this.s.selectedSystem;
+      App._bindSystemCallbacks(system);
+      system.display();
     }
   };
 
-  let { f, nav } = App.gui.reset('Sector ' + sector.id.join(), sector);
+  let { f, nav } = App.gui.reset('Sector ' + sector.id.slice(0, 2).join(), sector);
 
   nav.add(o, "viewGalaxy").name("View Galaxy");
 
-  f.add(o, 'seed').name("Seed").onFinishChange(v => o.update());
+  f.add(sector, 'toSave').name('To Save');
   f.add(o, 'ns', 32, 256, 1).name("# of Systems").onFinishChange(v => o.update());
-  f.add(o, 'save').name('Save');
 
   let sys = sector.selectedSystem;
   let asf = f.addFolder('System');

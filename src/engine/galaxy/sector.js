@@ -4,45 +4,42 @@ import { System } from '../system/starSystem.js';
 
 const getSeed = (RNG = chance, length = 12) => RNG.string({ length, casing: 'upper', alpha: true });
 
-const toIsometric = (_x, _y, _z) => {
-  return {
-    x: (_x - _y) * 0.866025,
-    y: _z + (_x + _y) * 0.5
-  }
-}
-
 const SECTOR = 1000
+
+const SAFETY = {
+  "safe": 3,
+  "unsafe": 2,
+  "dangerous": 1,
+  "perilous": 0,
+};
 
 class MajorSector {
   constructor(opts = {}) {
     this.what = "Sector"
     this.filter = "All"
+    this.toSave = false;
 
     this._onClick = opts.onClick || null;
     this._display = opts.display || null;
     this._setCrosshair = opts.setCrosshair || null;
 
     this.galaxy = opts.galaxy || null;
-    this.id = opts.id || [0, 0, 0];
+    this.id = opts.id || [0, 0];
     let _id = this.id.join();
-    let saved = opts.saved || {};
-    opts = Object.assign(opts, saved.opts || {});
 
-    this._seed = opts.seed || 0;
-    this.seed = this.galaxy ? [this.galaxy.seed, _id, this._seed].join(".") : _id;
-
+    this.seed = this.galaxy ? [this.galaxy.seed, _id].join(":") : _id;
     let RNG = new Chance(this.seed)
 
-    let alignment = this.alignment = "neutral"
+    let alignment = this.alignment = opts.alignment || "neutral";
     let alMod = [5, 3, 0, -3, -5][['chaotic', 'evil', 'neutral', 'good', 'lawful'].indexOf(alignment)]
     let sR = RNG.d12() + alMod
-    this.safety = sR <= 1 ? ["safe", 3] : sR <= 3 ? ["unsafe", 2] : sR <= 9 ? ["dangerous", 1] : ["perilous", 0]
+    this._safety = sR <= 1 ? "safe" : sR <= 3 ? "unsafe" : sR <= 9 ? "dangerous" : "perilous";
+    this._safety = opts.safety || this._safety;
 
     this._ns = opts.ns || 32;
-
     this._names = [];
     this._sysSeeds = [];
-    _.fromN(256, i => {
+    _.fromN(this._ns, i => {
       MakeName(this._names, RNG);
       this._sysSeeds.push(getSeed(RNG));
     })
@@ -52,7 +49,20 @@ class MajorSector {
     }
   }
 
-  refresh(show = -1, savedSystems = {}) {
+  get data() {
+    return {
+      alignment: this.alignment,
+      safety: this._safety,
+      ns: this._ns
+    }
+  }
+
+  get safety() {
+    const { _safety } = this;
+    return [_safety, SAFETY[_safety]];
+  }
+
+  refresh(show = -1) {
     let parent = this;
     let { safety } = this
     this._loc = []
@@ -63,13 +73,15 @@ class MajorSector {
     for (let i = 0; i < this._ns; i++) {
       let name = this._names[i];
       let seed = this._sysSeeds[i];
-      this._systems[seed] = new System(Object.assign({ seed, name, parent }, sysDefaults));
+      this._systems[seed] = new System(Object.assign({ seed, name, parent, i }, sysDefaults));
     }
 
     let _id = this.id.join();
+    const savedSystems = this.galaxy?._mods.systems || {};
     Object.entries(savedSystems).forEach(([sid, data]) => {
-      if (data && data.pid && data.pid == _id) {
-        this._systems[sid] = new System(Object.assign({}, data, { parent }, sysDefaults));
+      const [g, sc, _seed] = sid.split(":");
+      if (sc === _id) {
+        this._systems[_seed] = new System(Object.assign({}, data, { parent }, sysDefaults));
       }
     });
 
@@ -78,12 +90,6 @@ class MajorSector {
     }
 
     console.log(this);
-  }
-
-  addSystem(opts = {}) {
-    this._newSystems.push(opts);
-    this.refresh();
-    this.display();
   }
 
   get habitable() {
@@ -104,6 +110,7 @@ class MajorSector {
   get systems() {
     return Object.values(this._systems);
   }
+
   showSystems(filter) {
     let hab = ["Earthlike", "Survivable"]
     let poi = ["Settlements", "Ruins", "Gates", "Resources", "Outposts", "Dwellings", "Landmarks"]
@@ -153,23 +160,12 @@ class MajorSector {
   }
 
   get cultureCell() {
-    let mid = this.id.map(v => Math.floor(v / 10)).join();
     if (!this.galaxy) return null;
-    return this.galaxy._cultures._cells.get(mid);
+    return this.galaxy._cultures._cells.get(this.id.join());
   }
 
-  get closestCulture() {
-    let fd = this.galaxy.cultures.map(c => c.cells.map(s => [this.distance(s.x, s.y), c])).flat().sort((a, b) => a[0] - b[0])
-    return fd[0][1]
-  }
+  get cultures() {
 
-  get pastCultures() {
-    return this.allCultures.filter(c => cf.isAlive);
-  }
-
-  get allCultures() {
-    if (!this.cultureCell) return [];
-    return this.cultureCell._claims.map(id => this.galaxy.allCultures[id]);
   }
 
   addCrosshair(x, y, z = 0) {
@@ -192,39 +188,6 @@ class MajorSector {
       }
     });
   }
-}
-
-const History = () => {
-  G.eraList.filter((e, i) => i <= G.eraList.indexOf(G._era)).forEach((e, i) => {
-    let ef = this.allFactions.filter(f => f.era == e)
-    if (_fs.length == 0) {
-      _fs = ef.map(f => f.systems).flat()
-      return
-    }
-    if (ef.length == 0) {
-      _fs = _fs.filter(f => 'Planet,Resource'.includes(f.type) ? true : f.type == 'Orbital' ? Likely(75, RNG) : RNG.bool()).map(s => Object.assign(s, {
-        isRuin: true
-      }))
-    } else {
-      let tsum = 0
-        , nfs = _fs.length;
-      ef.map(f => {
-        tsum += f.tier
-        return f.tier
-      }).map((t, j) => Math.floor(nfs * t / tsum)).map(n => _fs.splice(0, n)).forEach((_efs, j) => {
-        let _f = ef[j]
-        let cfs = _f.systems
-        let core = cfs.splice(0, _f.claims.length)
-        let kfs = sArr.filter(s => 'Planet,Resource'.includes(s.type) ? true : s.type == 'Orbital' ? Likely(85, RNG) : 'Moon,Asteroid'.includes(s.type) ? Likely(65, RNG) : RNG.bool()).map(s => Object.assign(s, {
-          f: _f,
-          isRuin: false
-        }))
-        let dk = cfs.length - kfs.length
-        dk <= 0 ? null : BuildArray(dk, () => kfs.push(cfs.splice(0, 1)))
-        _fs.push(...kfs, ...core)
-      })
-    }
-  })
 }
 
 export { MajorSector }

@@ -1,6 +1,5 @@
 import { Cultures } from '../peoples/cultures.js';
 
-const SECTOR = 100
 const MAJORSECTOR = 1000
 
 class Galaxy {
@@ -37,16 +36,42 @@ class Galaxy {
     const { cultureSeed, cultureCount, generations } = opts;
     this._cultures = new Cultures(cultureSeed || this.seed, this._R, cultureCount, generations);
     console.timeEnd('Cultures')
+
+    this._mods = {
+      sectors: opts.sectors || {},
+      systems: opts.systems || {},
+    }
+
+    console.log(this);
   }
 
   get data() {
+    const systems = {};
+    const sectors = {};
+
+    //for each sector save sector or system
+    this._sectors.forEach(S => {
+      if (S.toSave) {
+        let data = S.data
+        sectors[S.id.join()] = S.data;
+      }
+
+      Object.values(S._systems).forEach(sy => {
+        if (sy.toSave) {
+          systems[sy.seed] = sy.data;
+        };
+      })
+    });
+
     return {
       seed: this.seed,
       radius: this._R / 1000,
       twist: this._twist * 10,
       cultureSeed: this._cultures.seed,
       cultureCount: this._cultures.birth,
-      generations: this._cultures._steps
+      generations: this._cultures._steps,
+      sectors,
+      systems
     }
   }
 

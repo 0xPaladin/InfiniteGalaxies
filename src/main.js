@@ -59,8 +59,8 @@ class App extends Component {
       sysSel: '',
       sysF() {
         let sys = window.App.active[this.sysSel];
-        let [x, y, z] = sys.pid.split(",").map(Number);
-        window.App.getSector(x, y, z);
+        let [x, y] = sys.pid.split(",").map(Number);
+        window.App.getSector(x, y);
         window.App.sector.refresh(sys.seed, window.App.active);
       }
     }
@@ -94,7 +94,11 @@ class App extends Component {
     };
 
     this._bindGalaxyCallbacks = (galaxy) => {
-      galaxy._onClick = (self, event, data) => {};
+      galaxy._onClick = (self, event, data) => {
+        if (event === 'galaxySectorClick' && self._viewBtn) {
+          self._viewBtn.name("View Sector " + data.gx + "," + data.gy);
+        }
+      };
       galaxy._display = (self, events) => setGalaxyView(self, events);
       galaxy._setCrosshair = (x, y) => setCrosshair(x, y);
       galaxy._save = (data) => {
@@ -182,12 +186,12 @@ class App extends Component {
     })
   }
 
-  getSector(x, y, z) {
-    let _id = [x, y, z].join();
-    let saved = this.active[_id] || {};
-    this.sector = new MajorSector({ id: [x, y, z], galaxy: this.galaxy, saved });
+  getSector(x, y) {
+    let _id = [x, y].join();
+    let saved = this.galaxy._mods.sectors[_id] || this.active[_id] || {};
+    this.sector = new MajorSector({ id: [x, y], galaxy: this.galaxy, saved });
     this._bindSectorCallbacks(this.sector);
-    this.sector.refresh(-1, this.active);
+    this.sector.refresh(-1);
     this.sector.display();
     setupSectorGUI(this.sector);
   }
@@ -200,14 +204,18 @@ class App extends Component {
     })
     this.active = data;
 
-    Object.keys(data).forEach(key => {
+    const addKey = (key) => {
       if (key == this.galaxy.seed) return;
       if (key.includes(",")) {
-        go.secArr.push(key);
+        if (!go.secArr.includes(key)) go.secArr.push(key);
       } else {
-        go.sysArr.push(key);
+        if (!go.sysArr.includes(key)) go.sysArr.push(key);
       }
-    })
+    };
+
+    Object.keys(data).forEach(addKey);
+    Object.keys(this.galaxy._mods.sectors).forEach(addKey);
+    Object.keys(this.galaxy._mods.systems).forEach(addKey);
   }
 
   notify(text, type = "success") {

@@ -1,5 +1,8 @@
 import { starTypeData, gravity, blackbody, planetTypeData } from '../constants/astrophysics.js';
 import { GasGiantColors, RockyColors, TerrainColors } from "../constants/data.js"
+import { setPlanetType, setBarrenSubtype, generateMesh, mesh, map, quadGeometry } from './we-planet.js';
+
+const HOSTILE_ATMOS = ['Corrosive', 'Toxic', 'Crushing'];
 
 const getSeed = (length = 12, RNG = chance) => RNG.string({ length, casing: 'upper', alpha: true });
 
@@ -11,7 +14,7 @@ class Planetoid {
 
     this._i = i;
     this._seed = seed || parent._cSeed[i];
-    this.seed = [parent.seed, this._seed].join(".");
+    this.seed = [parent.seed, this._seed].join(":");
 
     this._orbitalRadius = orbit || parent.orbits[i];
     this._insolation = insolation || parent.star.luminosity / Math.pow(this._orbitalRadius, 2);
@@ -33,6 +36,21 @@ class Planetoid {
     this._rmin = 0.4 * RNG.range(0.5, 2);
     this._rmax = 50 * RNG.range(0.5, 2);
   }
+
+  get data() {
+    const { _seed, insolation, classification, _orbitalRadius, radius, density, name } = this;
+    return {
+      name,
+      insolation,
+      classification,
+      seed: _seed,
+      orbit: Number(this._orbitalRadius.toFixed(3)),
+      radius: Number((this.radius / 1000).toFixed(3)),
+      density: Number(this.density.toFixed(2)),
+      moons: this._moons.map(m => m.data)
+    }
+  }
+
   get i() {
     let idx = this.what == "Planet" ? this.parent.objects.map(o => o._seed) : this.parent._moons.map(o => o._seed);
     return idx.indexOf(this._seed);
@@ -73,17 +91,58 @@ class Planetoid {
   manageFavorites() {
     this.system.manageFavorites(this.seed)
   }
-  get data() {
-    return {
-      "i": this._i,
-      "seed": this._seed,
-      "parent": this.what == "Planet" ? "" : this.parent._seed,
-      "orbit": Number(this._orbitalRadius.toFixed(3)),
-      "type": this.classification,
-      "radius": Number((this.radius / 1000).toFixed(3)),
-      "density": Number(this.density.toFixed(2)),
-      "moons": this._moons.length
+
+  getPlanetEngineType() {
+    if (this.classification === 'gas giant' || this.classification === 'brown dwarf') {
+      return 'gasgiant';
     }
+    const atmo = this.atmosphere || '';
+    if (atmo === 'Trace') return 'airless';
+    if (HOSTILE_ATMOS.includes(atmo)) return 'barren';
+    if (this.HI <= 2) return 'earthlike';
+    if (this.HI <= 4) return 'barren';
+    return 'airless';
+  }
+
+  _seedToNum() {
+    const s = this.seed;
+    if (s) {
+      let n = 0;
+      for (let i = 0; i < s.length; i++) n += s.charCodeAt(i);
+      return n;
+    }
+    const s2 = this._seed;
+    if (s2) {
+      let n = 0;
+      for (let i = 0; i < s2.length; i++) n += s2.charCodeAt(i);
+      return n;
+    }
+    return Date.now();
+  }
+
+  generatePlanet(opts = {}) {
+    const engineType = this._engineType || this.getPlanetEngineType();
+    const isBarren = engineType === 'barren';
+    const barrenSubtype = isBarren && HOSTILE_ATMOS.includes(this.atmosphere) ? 'hostile' : 'barren';
+
+    setPlanetType(engineType);
+    setBarrenSubtype(barrenSubtype);
+    generateMesh({
+      seed: this._seedToNum(),
+      N: opts.N,
+      nPlates: opts.nPlates,
+      jitter: opts.jitter,
+      waterLevel: opts.waterLevel,
+      tempOffset: opts.tempOffset,
+      rainOffset: opts.rainOffset,
+    });
+
+    this._mesh = mesh;
+    this._map = { ...map };
+    this._quadData = { I: quadGeometry.I, xyz: quadGeometry.xyz, tm: quadGeometry.tm };
+    this._engineType = engineType;
+
+    return { mesh, map, quadGeometry };
   }
 }
 
@@ -94,7 +153,7 @@ class Moon extends Planetoid {
 
     this.what = "Moon"
 
-    let template = this.template = planetTypeData[0];
+    let template = this.template = opts.classification ? planetTypeData[ti.indexOf(opts.classification)] : planetTypeData[0];
     this.classification = template.classification;
 
     let RNG = new Chance(this.seed);
@@ -125,7 +184,8 @@ class Planet extends Planetoid {
 
     let ti = planetTypeData.map(d => d.classification);
     let template = RNG.weighted(planetTypeData, [this._insolation * 100, 10, 1]);
-    template = this.template = opts.type ? planetTypeData[ti.indexOf(opts.type)] : template;
+
+    template = this.template = opts.classification ? planetTypeData[ti.indexOf(opts.classification)] : template;
     let _type = this.classification = template.classification;
 
     let _r = RNG.randBetween(template.radius[0], template.radius[1]);
@@ -139,20 +199,24 @@ class Planet extends Planetoid {
     this.color = _type == "gas giant" ? [RNG.pickone(GasGiantColors).name, RNG.pickone(GasGiantColors).name] : _type == "rocky" ? RNG.pickone(RockyColors).name : "brown"
 
     let nMajor = _type == "rocky" ? RNG.pickone([0, 0, 1, 2]) : 1 + RNG.d4();
-    nMajor = opts.moons ? (opts.moons > nMajor ? nMajor : opts.moons) : nMajor;
     let nMinor = _type == "rocky" ? RNG.pickone([0, 0, 1, 2]) : RNG.sumDice("2d6")
-    nMinor = opts.moons ? opts.moons - nMajor : nMinor;
+    let mods = [];
+    if (opts.moons != null) {
+      let total = Array.isArray(opts.moons) ? opts.moons.length : opts.moons;
+      mods = Array.isArray(opts.moons) ? opts.moons : [];
+      nMajor = Math.min(nMajor, total);
+      nMinor = total - nMajor;
+    }
     this._nm = nMajor + nMinor;
 
     this._rvar = _.fromN(this._nm, i => RNG.randBetween(0.5, 1));
 
-    let _mods = this.parent._mods;
     _.fromN(nMajor + nMinor, (j) => {
       let opts = Object.assign({
         i: j,
         insolation: this._insolation,
         isMinor: !(j < nMajor)
-      }, _mods[[this._i, j].join(".")] || {})
+      }, mods[j] || {})
       this._moons.push(new Moon(this, opts));
     })
 

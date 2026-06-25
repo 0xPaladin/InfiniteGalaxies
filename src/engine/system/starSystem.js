@@ -8,20 +8,18 @@ const getSeed = (length = 12, RNG = chance) => RNG.string({ length, casing: 'upp
 
 class System {
   constructor(opts = {}) {
-    this.what = "System"
+    this.what = "System";
+    this.toSave = false;
 
     this._onClick = opts.onClick || null;
     this._display = opts.display || null;
-
     this._parentRef = opts.parent || null;
 
+    this.i = opts.i || 0;
     this._seed = opts.seed || getSeed(16);
-    let galaxySeed = opts.galaxySeed;
-    if (!galaxySeed && this._parentRef && this._parentRef.galaxy) {
-      galaxySeed = this._parentRef.galaxy.seed;
-    }
-    this.seed = galaxySeed ? [galaxySeed, this._seed].join(".") : this._seed;
-    this._name = opts.name || null
+    this.seed = [this._parentRef ? this._parentRef.seed : "", this._seed].join(":");
+
+    this._name = opts.name || null;
 
     let RNG = new Chance(this.seed)
 
@@ -62,10 +60,12 @@ class System {
     this._rmax = 50 * range(0.5, 2);
     this._rvar = _.fromN(this._np, i => range(0.5, 1));
 
-    this._mods = opts.mods || {};
     this._children = _.fromN(this._np, i => {
-      return new Planet(this, this._mods[i] || { i });
+      return new Planet(this, { i });
     });
+    if (opts.children) {
+      opts.children.forEach(P => this.replace(new Planet(this, P)));
+    }
 
     let list = this.planets.map(p => p.HI).concat(this.planets.map(p => p._moons.map(m => m.HI)).flat()).sort()
     this.HI = list.length ? list.shift() : 5;
@@ -89,18 +89,18 @@ class System {
 
   get data() {
     return {
-      pid: this.parent ? this.parent.id.join() : null,
       seed: this._seed,
       xyz: this._loc,
       name: this._name,
       starClass: this.star.SC,
       np: this._np,
-      mods: this._mods
+      children: this.children.map(c => c.data)
     }
   }
 
   replace(P) {
-    let i = this._children.map(c => c._seed).indexOf(P._seed);
+    let i = this._children.map(c => c._seed).indexOf(P.seed);
+    P.i = i;
     this._children[i] = P;
   }
 
@@ -124,6 +124,9 @@ class System {
   }
   get planetHI() {
     return _.fromN(4, (i) => this.planets.filter(m => m.HI == i + 1))
+  }
+  get children() {
+    return this._children;
   }
   get planets() {
     return this._children.filter(c => c.what == "Planet");

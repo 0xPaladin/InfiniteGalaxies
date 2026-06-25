@@ -5,15 +5,24 @@ import {
   GAS_GIANT_DEFAULTS, SHADER_DEFAULTS,
 } from '../constants/defaults.js';
 import { generateSunSphereMaterial, generateSunGlowGeometry, createSunGlowMaterial } from './sun-shaders.js';
-import { rebuildColormapTexture } from './colormap-texture.js';
+import { getData as getColormapData, width, height } from '../constants/colormap.js';
 import {
   createPlanetSurfaceMaterial, createLineMaterial, createOverlayMaterial,
   createCloudMaterial, createGasGiantMaterial,
-} from './shaders.js';
+} from './planet-shaders.js';
 import {
-  setSeed, setN, setJitter, setPlanetType, setBarrenSubtype,
-  generateMesh, quadGeometry, generateVoronoiGeometry,
+  generateVoronoiGeometry,
 } from '../system/we-planet.js';
+
+function makeDataTexture(data) {
+    const texture = new THREE.DataTexture(data, width, height, THREE.RGBAFormat);
+    texture.wrapS = THREE.ClampToEdgeWrapping;
+    texture.wrapT = THREE.ClampToEdgeWrapping;
+    texture.magFilter = THREE.NearestFilter;
+    texture.minFilter = THREE.NearestFilter;
+    texture.needsUpdate = true;
+    return texture;
+}
 
 const LOD_CONFIG = {
   low: { N: 1000, sphereSegs: 12 },
@@ -120,22 +129,15 @@ export function createPlanetMesh(planet, lod = 'medium') {
     return createGasGiantMesh(planet, config);
   }
 
-  const seedNum = planet.seed ? planet.seed.split('.').reduce((a, s) => a + s.charCodeAt(0), 0) : planet._seed ? planet._seed.split('').reduce((a, c) => a + c.charCodeAt(0), 0) : Date.now();
-
-  const barrenSubtype = engineType === 'barren' && HOSTILE_ATMOS.includes(planet.atmosphere) ? 'hostile' : 'barren';
-  setSeed(seedNum);
-  setN(config.N);
-  setJitter(0.5);
-  setPlanetType(engineType);
-  setBarrenSubtype(barrenSubtype);
-  generateMesh();
+  planet.generatePlanet({ N: config.N, jitter: 0.5 });
+  const qd = planet._quadData;
 
   const geom = new THREE.BufferGeometry();
-  geom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(quadGeometry.xyz), 3));
-  geom.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(quadGeometry.tm), 2));
-  geom.setIndex(new THREE.BufferAttribute(new Uint32Array(quadGeometry.I), 1));
+  geom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(qd.xyz), 3));
+  geom.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(qd.tm), 2));
+  geom.setIndex(new THREE.BufferAttribute(new Uint32Array(qd.I), 1));
 
-  const colormapTex = rebuildColormapTexture(engineType);
+  const colormapTex = makeDataTexture(getColormapData(engineType));
   const mat = createPlanetSurfaceMaterial();
   mat.uniforms.u_colormap.value = colormapTex;
 
@@ -143,7 +145,7 @@ export function createPlanetMesh(planet, lod = 'medium') {
   mesh.scale.setScalar(1);
   mesh.userData.__engineType = engineType;
   mesh.userData.__type = 'planet';
-  mesh.userData.__seed = seedNum;
+  mesh.userData.__seed = planet._seedToNum();
 
   const glow = createPlanetGlowSprite(new THREE.Color(planet.color || '#888888'), 1);
   glow.position.set(0, 0, 0);
@@ -168,24 +170,17 @@ export function upgradePlanetMesh(planetGroup, planet, onComplete) {
     return;
   }
 
-  const seedNum = oldMesh.userData.__seed;
-  const engineType = oldMesh.userData.__engineType || 'earthlike';
   const config = LOD_CONFIG.high;
-  const barrenSubtype = engineType === 'barren' && planet && HOSTILE_ATMOS.includes(planet.atmosphere) ? 'hostile' : 'barren';
-
-  setSeed(seedNum);
-  setN(config.N);
-  setJitter(0.75);
-  setPlanetType(engineType);
-  setBarrenSubtype(barrenSubtype);
-  generateMesh();
+  planet.generatePlanet({ N: config.N, jitter: 0.75 });
+  const qd = planet._quadData;
 
   const geom = new THREE.BufferGeometry();
-  geom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(quadGeometry.xyz), 3));
-  geom.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(quadGeometry.tm), 2));
-  geom.setIndex(new THREE.BufferAttribute(new Uint32Array(quadGeometry.I), 1));
+  geom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(qd.xyz), 3));
+  geom.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(qd.tm), 2));
+  geom.setIndex(new THREE.BufferAttribute(new Uint32Array(qd.I), 1));
 
-  const colormapTex = rebuildColormapTexture(engineType);
+  const engineType = planet._engineType;
+  const colormapTex = makeDataTexture(getColormapData(engineType));
   const mat = createPlanetSurfaceMaterial();
   mat.uniforms.u_colormap.value = colormapTex;
 
@@ -193,7 +188,7 @@ export function upgradePlanetMesh(planetGroup, planet, onComplete) {
   const newMesh = new THREE.Mesh(geom, mat);
   newMesh.scale.setScalar(scale);
   newMesh.userData.__type = 'planet';
-  newMesh.userData.__seed = seedNum;
+  newMesh.userData.__seed = planet._seedToNum();
   newMesh.userData.__engineType = engineType;
 
   planetGroup.remove(oldMesh);
@@ -263,23 +258,17 @@ function createGasGiantMesh(planet, config) {
 
 export function createMoonMesh(moon, lod = 'low') {
   const config = LOD_CONFIG[lod] || LOD_CONFIG.low;
-  const seedNum = moon.seed ? moon.seed.split('.').reduce((a, s) => a + s.charCodeAt(0), 0) : Date.now();
   const engineType = getPlanetEngineType(moon);
-  const barrenSubtype = engineType === 'barren' && HOSTILE_ATMOS.includes(moon.atmosphere) ? 'hostile' : 'barren';
 
-  setSeed(seedNum);
-  setN(config.N);
-  setJitter(0.3);
-  setPlanetType(engineType);
-  setBarrenSubtype(barrenSubtype);
-  generateMesh();
+  moon.generatePlanet({ N: config.N, jitter: 0.3 });
+  const qd = moon._quadData;
 
   const geom = new THREE.BufferGeometry();
-  geom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(quadGeometry.xyz), 3));
-  geom.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(quadGeometry.tm), 2));
-  geom.setIndex(new THREE.BufferAttribute(new Uint32Array(quadGeometry.I), 1));
+  geom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(qd.xyz), 3));
+  geom.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(qd.tm), 2));
+  geom.setIndex(new THREE.BufferAttribute(new Uint32Array(qd.I), 1));
 
-  const colormapTex = rebuildColormapTexture(engineType);
+  const colormapTex = makeDataTexture(getColormapData(engineType));
   const mat = createPlanetSurfaceMaterial();
   mat.uniforms.u_colormap.value = colormapTex;
 
@@ -441,12 +430,12 @@ let _colormapColorParams = {};
 // Regenerate colormap texture for a type with user colors and swap it on the planet material
 export function updateColormapColors(type, colors) {
     _colormapColorParams = colors || {};
-    const newTexture = rebuildColormapTexture(
+    const newTexture = makeDataTexture(getColormapData(
         type,
         _colormapColorParams.colorA,
         _colormapColorParams.colorB,
         _colormapColorParams.colorC,
-    );
+    ));
     if (planetMaterial) {
         if (planetMaterial.uniforms.u_colormap.value) {
             planetMaterial.uniforms.u_colormap.value.dispose();
@@ -720,12 +709,12 @@ export function rebuildCloudSphere(type, seed, barrenSubtype) {
 // Regenerate the colormap DataTexture for the given planet type and swap on planet material
 export function updateColormapTexture(type) {
     if (type === 'gasgiant' || type === 'sun') return;
-    const newTexture = rebuildColormapTexture(
+    const newTexture = makeDataTexture(getColormapData(
         type,
         _colormapColorParams.colorA,
         _colormapColorParams.colorB,
         _colormapColorParams.colorC,
-    );
+    ));
     if (planetMaterial) {
         if (planetMaterial.uniforms.u_colormap.value) {
             planetMaterial.uniforms.u_colormap.value.dispose();
