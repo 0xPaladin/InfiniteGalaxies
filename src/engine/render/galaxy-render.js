@@ -353,10 +353,7 @@ export function setGalaxyView(galaxy, { onSectorClick } = {}) {
     pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
     raycaster.setFromCamera(pointer, camera);
 
-    const hits = raycaster.intersectObjects(viewGroup.children, true);
-    const claimHit = hits.find(h => h.object.userData && h.object.userData.type === 'claim');
-
-    if (!claimHit && onSectorClick) {
+    if (onSectorClick) {
       const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
       const intersection = new THREE.Vector3();
       raycaster.ray.intersectPlane(plane, intersection);

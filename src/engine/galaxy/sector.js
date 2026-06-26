@@ -1,5 +1,5 @@
 import { MakeName } from '../random_name.js';
-
+import { Faction } from '../peoples/factions.js';
 import { System } from '../system/starSystem.js';
 
 const getSeed = (RNG = chance, length = 12) => RNG.string({ length, casing: 'upper', alpha: true });
@@ -47,6 +47,9 @@ class MajorSector {
     if (this.galaxy) {
       this.galaxy._sectors.set(this.id.join(), this);
     }
+
+    this._factions = [];
+    this._cultures = [];
   }
 
   get data() {
@@ -88,6 +91,8 @@ class MajorSector {
     if (show != -1) {
       this._systems[show].display();
     }
+
+    this.generateFactions();
 
     console.log(this);
   }
@@ -166,6 +171,87 @@ class MajorSector {
 
   get cultures() {
 
+  }
+
+  _makeLocalCulture(RNG) {
+    const id = `local_${this._cultures.length}`;
+    this._cultures.push({
+      id,
+      name: RNG.word({ syllables: RNG.natural({ min: 2, max: 4 }) }),
+      color: _.hslToHex(RNG.randBetween(0, 360), RNG.randBetween(30, 100), RNG.randBetween(20, 80))
+    });
+    return id;
+  }
+
+  generateFactions() {
+    const cell = this.cultureCell;
+    const RNG = new Chance([this.seed, "factions"].join(":"));
+    this._factions = [];
+    this._cultures = [];
+
+    if (cell && cell.state === 1 && cell._claims.length > 0) {
+      const primaryCultureId = cell._claims[0];
+      const count = cell._claims.filter(id => id === primaryCultureId).length;
+
+      const primaryTier = count === 1 ? 2
+        : count === 2 ? RNG.pickone([3, 4])
+        : count === 3 ? RNG.pickone([4, 5])
+        : 5;
+
+      const otherIds = [...new Set(cell._claims.filter(id => id !== primaryCultureId))];
+
+      const specs = [{ culture: primaryCultureId, tier: primaryTier }];
+
+      if (RNG.bool({ likelihood: 50 })) {
+        specs.push({ culture: primaryCultureId, tier: primaryTier });
+      }
+
+      for (let t = primaryTier - 1; t >= 1; t--) {
+        const n = RNG.d6() + 3;
+        for (let i = 0; i < n; i++) {
+          specs.push({ culture: primaryCultureId, tier: t });
+        }
+      }
+
+      for (let i = 1; i < specs.length; i++) {
+        if (RNG.bool({ likelihood: 25 })) {
+          specs[i].culture = otherIds.length > 0
+            ? RNG.pickone(otherIds)
+            : this._makeLocalCulture(RNG);
+        }
+      }
+
+      specs.forEach(s => {
+        this._factions.push(new Faction(this.galaxy._cultures, { culture: s.culture, tier: s.tier }));
+      });
+
+    } else if (RNG.bool({ likelihood: 50 })) {
+      const primaryTier = RNG.weighted([2, 3, 4, 5], [5, 7, 7, 1]);
+      const primaryCultureId = this._makeLocalCulture(RNG);
+
+      const specs = [{ culture: primaryCultureId, tier: primaryTier }];
+
+      if (RNG.bool({ likelihood: 50 })) {
+        specs.push({ culture: primaryCultureId, tier: primaryTier });
+      }
+
+      for (let t = primaryTier - 1; t >= 1; t--) {
+        const n = RNG.d6() + 3;
+        for (let i = 0; i < n; i++) {
+          specs.push({ culture: primaryCultureId, tier: t });
+        }
+      }
+
+      for (let i = 1; i < specs.length; i++) {
+        if (RNG.bool({ likelihood: 25 })) {
+          specs[i].culture = this._makeLocalCulture(RNG);
+        }
+      }
+
+      specs.forEach(s => {
+        this._factions.push(new Faction(this.galaxy._cultures, { culture: s.culture, tier: s.tier }));
+      });
+    }
   }
 
   addCrosshair(x, y, z = 0) {
