@@ -33,7 +33,7 @@ function getSpherePosition(rng, { r }) {
  * @param {number} seed
  * @returns {object} { map: string, stars: array, stats: object }
  */
-function generateSector(seed = Date.now(), opts = {}) {
+export function generateSector(seed = Date.now(), opts = {}) {
   const rng = new PRNG(seed);
 
   const { bounds } = opts;
@@ -48,22 +48,22 @@ function generateSector(seed = Date.now(), opts = {}) {
   // 1. Seed 6–10 main-sequence habitable candidates
   // -------------------------------------------------
   let nHab = 6 + Math.floor(rng.rand() * 5); // 6–10
-  nHab = opts.nHab || nhab;
+  nHab = opts.nHab || nHab;
   for (let i = 0; i < nHab; i++) {
     const system = generateSystem([seed, systems.length].join(':'), { forceHabitable: true });
     system.name = MakeName(names, rng);
-    system.pos = bounds.r ? getCirclePosition(rng, bounds) : getRectPosition(rng, bounds);
+    system.pos = bounds.r ? getSpherePosition(rng, bounds) : getPrismPosition(rng, bounds);
   }
 
   // -------------------------------------------------
   // 2. Add remaining stars/multiples → total 90–120
   // -------------------------------------------------
-  let nSystems = 90 + Math.floor(rng() * 31); // 90–120
+  let nSystems = 90 + Math.floor(rng.rand() * 31); // 90–120
   nSystems = opts.nSystems || nSystems;
   while (systems.length < nSystems) {
     const system = generateSystem([seed, systems.length].join(':'));
     system.name = MakeName(names, rng);
-    system.pos = bounds.r ? getCirclePosition(rng, bounds) : getRectPosition(rng, bounds);
+    system.pos = bounds.r ? getSpherePosition(rng, bounds) : getPrismPosition(rng, bounds);
   }
 
   return { systems, seed, H, W, D };

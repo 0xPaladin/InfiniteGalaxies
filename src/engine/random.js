@@ -1,3 +1,5 @@
+import aleaPRNG from '../../lib/aleaPRNG-1.1.js';
+
 export class PRNG {
   constructor(seed, type = "alea") {
     this.prng = type === 'alea' ? aleaPRNG(seed) : mulberry32(seed);
@@ -48,7 +50,7 @@ export class PRNG {
  * @returns {function(): number} A function that returns a float in [0, 1)
  */
 export function mulberry32(seed) {
-  let s = typeof seed === 'string' ? seedFromString(str) : seed;
+  let s = typeof seed === 'string' ? seedFromString(seed) : seed;
   return function () {
     s = (s + 0x6d2b79f5) | 0;
     let t = Math.imul(s ^ (s >>> 15), 1 | s);

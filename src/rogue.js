@@ -1,212 +1,352 @@
-import "./engine/mixins.js"
+// Rogue Galaxies — plain JS entry point
+// No Preact, no Chance. Uses ROT for ASCII display, lil-gui for controls,
+// localforage for persistence, PRNG for randomness.
 
-import "../lib/localforage.min.js"
-const DB = localforage.createInstance({
-    name: "RogueGalaxies",
-    storeName: 'galaxies',
-})
+import { PRNG } from './engine/random.js';
+import { generateSector } from './engine/galaxy/sector.js';
+import { generateSystem } from './engine/galaxy/system.js';
 
-import { html, render, Component } from 'https://esm.sh/htm/preact/standalone';
-_.html = html;
+// ── Globals ──────────────────────────────────────────────────────────
+const DB_KEY = 'rogue-galaxies';
+let App = null;
 
-import GUI from '../lib/lil-gui.0.20.js';
-
-//lil-gui params
-const PARAMS = {
-
+// ── Toast ────────────────────────────────────────────────────────────
+function toast(msg, ms = 2500) {
+    const c = document.getElementById('toastContainer');
+    if (!c) return;
+    const el = document.createElement('div');
+    el.className = 'toast';
+    el.textContent = msg;
+    c.appendChild(el);
+    setTimeout(() => el.remove(), ms);
 }
 
-const initGUI = (app) => {
-    const gui = new GUI({
-        title: "Rogue Galaxies"
-    });
-
-    gui._folders = {};
-    gui._folders.load = this.gui.addFolder("Load Saved");
-    gui._folders.nav = this.gui.addFolder("Nav");
-
-    gui.reset = (id, what) => {
-        let g = app.gui;
-
-        g._folders.load.destroy();
-        g._folders.nav.destroy();
-
-        PARAMS.saves.length > 0 ? g._folders.load = g.addFolder("Load Saved") : null;
-        g._folders.nav = g.addFolder("Nav");
-    };
-
-    app.gui = gui;
+// ── Persistence ──────────────────────────────────────────────────────
+async function saveGame(data) {
+    await localforage.setItem(DB_KEY, data);
+    toast('Saved');
+}
+async function loadGame() {
+    return await localforage.getItem(DB_KEY);
+}
+async function deleteSave() {
+    await localforage.removeItem(DB_KEY);
+    toast('Save deleted');
 }
 
-class App extends Component {
+// ── Helpers ──────────────────────────────────────────────────────────
+function $(id) { return document.getElementById(id); }
+function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+
+// ── App ──────────────────────────────────────────────────────────────
+class RogueApp {
     constructor() {
-        super();
-        this.state = {
-            show: "Galaxy",
-            dialog: "",
-            info: "",
-        };
-
-        window.App = this;
-
-        this.DB = DB
-        this.html = html
-
-        this.active = {}
-        this.toSave = new Set();
-
-        this._bindSectorCallbacks = (sector) => {
-            sector._onClick = (self, event, data) => {
-                if (event === 'sectorStarClick') {
-                    this.updateState("info", getSystemInfo(data.system));
-                    setupSectorGUI(self);
-                }
-            };
-            sector._display = (self, events) => setSectorView(self, events);
-            sector._setCrosshair = (x, y, z) => setCrosshair(x, y, z);
-        };
-
-        this._bindSystemCallbacks = (system) => {
-            system._onClick = (self, event, data) => {
-                if (event === 'systemDisplay') {
-                    this.updateState("info", getSystemInfo(self));
-                    setupSystemGUI(self);
-                } else if (event === 'systemPlanetClick') {
-                    const { planet, group } = data;
-                    planet._upgradeCallback = () => {
-                        if (group) {
-                            upgradeSystemPlanet(group, planet);
-                            zoomToPlanet(group, planet);
-                        }
-                    };
-                    this.updateState("info", getPlanetInfo(planet));
-                    setupPlanetGUI(planet);
-                    if (planet._upgradeCallback) planet._upgradeCallback();
-                }
-            };
-            system._display = (self, events) => setSystemView(self, events);
-        };
+        this.display = null;       // ROT.Display instance
+        this.gui = null;           // lil-gui instance
+        this.map = null;           // current map data
+        this.view = 'sector';      // 'sector' | 'system'
+        this.currentSystem = null; // system object when in system view
+        this.active = {};          // saved games keyed by seed
+        this.sectorSeed = null;
+        this.systemSeed = null;
+        this._resizeHandler = this._resizeHandler.bind(this);
     }
 
-    async componentDidMount() {
-        setInterval(() => {
-            this.refresh();
-        }, 1000)
-
-        window.addEventListener("resize", () => {
-            resizeView();
+    // ── Lifecycle ──────────────────────────────────────────────────
+    async init() {
+        this.display = new ROT.Display({
+            width: 100,
+            height: 40,
+            font: 'monospace',
+            fontSize: 14,
+            spacing: 1,
+            forceSquareRatio: true,
+            maxWidth: 1200,
+            maxHeight: 800
         });
+        const host = $('display');
+        host.appendChild(this.display.getContainer());
+
+        // Click handling
+        const container = this.display.getContainer();
+        container.addEventListener('click', (ev) => this._onClick(ev));
+        container.style.cursor = 'crosshair';
+
+        // Resize
+        window.addEventListener('resize', this._resizeHandler);
+
+        // lil-gui
+        this.gui = new lil.Gui({ title: 'Rogue Galaxies' });
+        this._buildGui();
+
+        // Load saves
+        this.active = (await loadGame()) || {};
+        this._populateLoadDropdown();
+
+        // Generate initial sector
+        this.sectorSeed = Math.floor(ROT.RNG.uniform() * 1e9);
+        this._renderSector();
     }
 
-    componentWillUnmount() { }
-
-    random() {
+    _resizeHandler() {
+        if (this.display) this.display.resize();
     }
 
-    load(_id) {
-        DB.getItem(_id).then((saved) => {
-            this.galaxy = new Galaxy(saved[_id]);
-            this.galaxy.app = this;
-            this._bindGalaxyCallbacks(this.galaxy);
-            this.mapActive(saved);
-            this.galaxy.display();
-            setupGalaxyGUI(this.galaxy);
-        })
-    }
+    // ── GUI ────────────────────────────────────────────────────────
+    _buildGui() {
+        const g = this.gui;
 
-    getSector(x, y) {
-        let _id = [x, y].join();
-        let saved = this.galaxy._mods.sectors[_id] || this.active[_id] || {};
-        this.sector = new MajorSector({ id: [x, y], galaxy: this.galaxy, saved });
-        this._bindSectorCallbacks(this.sector);
-        this.sector.refresh(-1);
-        this.sector.display();
-        setupSectorGUI(this.sector);
-    }
-
-    mapActive(data) {
-        let go = this.guiOpts;
-        ['sec', 'sys'].forEach(w => {
-            go[`${w}Arr`] = [];
-            go[`${w}Sel`] = '';
-        })
-        this.active = data;
-
-        const addKey = (key) => {
-            if (key == this.galaxy.seed) return;
-            if (key.includes(",")) {
-                if (!go.secArr.includes(key)) go.secArr.push(key);
+        // View folder
+        const viewFolder = g.addFolder('View');
+        viewFolder.add(this, 'view', ['sector', 'system']).name('Mode').onChange((v) => {
+            if (v === 'system' && this.currentSystem) {
+                this._renderSystem();
             } else {
-                if (!go.sysArr.includes(key)) go.sysArr.push(key);
+                this._renderSector();
             }
-        };
+        });
 
-        Object.keys(data).forEach(addKey);
-        Object.keys(this.galaxy._mods.sectors).forEach(addKey);
-        Object.keys(this.galaxy._mods.systems).forEach(addKey);
+        // Generate folder
+        const genFolder = g.addFolder('Generate');
+        genFolder.add(this, '_genNewSector').name('New Sector');
+        genFolder.add(this, '_genNewSystem').name('New System');
+        genFolder.add(this, '_saveGame').name('Save');
+        genFolder.add(this, '_loadGame').name('Load');
+        genFolder.add(this, '_deleteSave').name('Delete Save');
+
+        // Info
+        const infoFolder = g.addFolder('Info');
+        this._infoControllers = {};
+        this._infoControllers.systemName = infoFolder.add({ v: '—' }, 'v').name('System').disable();
+        this._infoControllers.starType = infoFolder.add({ v: '—' }, 'v').name('Star Type').disable();
+        this._infoControllers.planets = infoFolder.add({ v: '—' }, 'v').name('Planets').disable();
+        this._infoControllers.hi = infoFolder.add({ v: '—' }, 'v').name('HI').disable();
     }
 
-    notify(text, type = "success") {
-        let opts = {
-            theme: "relax",
-            type,
-            text,
-            layout: "center"
+    _genNewSector() {
+        this.sectorSeed = Math.floor(ROT.RNG.uniform() * 1e9);
+        this._renderSector();
+        toast('New sector generated');
+    }
+
+    _genNewSystem() {
+        this.systemSeed = Math.floor(ROT.RNG.uniform() * 1e9);
+        this._renderSystem();
+        toast('New system generated');
+    }
+
+    _saveGame() {
+        saveGame(this.active);
+    }
+
+    async _loadGame() {
+        const data = await loadGame();
+        if (data) {
+            this.active = data;
+            this._populateLoadDropdown();
+            toast('Loaded');
+        } else {
+            toast('No save found');
         }
-        new Noty(opts).show();
     }
 
-    async updateState(what, val = "") {
-        let s = {}
-        s[what] = val
-        await this.setState(s)
-    }
-    refresh() {
-        this.show = this.state.show
-        this.dialog = this.state.dialog
+    _deleteSave() {
+        deleteSave();
+        this.active = {};
+        this._populateLoadDropdown();
     }
 
-    set show(what) {
-        this.updateState("show", what)
+    _populateLoadDropdown() {
+        // TODO: wire to GUI dropdown
     }
 
-    get show() {
-        let [what, id] = this.state.show.split(".")
-        return UI[what] ? UI[what](this) : this[what] ? this[what][id].UI ? this[what][id].UI() : "" : ""
+    // ── Rendering ──────────────────────────────────────────────────
+    _renderSector() {
+        this.view = 'sector';
+        this.currentSystem = null;
+        this.map = generateSector(this.sectorSeed, {
+            bounds: { w: 100, h: 100, d: 100 }
+        });
+
+        this.display.clear();
+        this._updateInfo();
+
+        const { systems, H, W } = this.map;
+        const cx = Math.floor(W / 2);
+        const cy = Math.floor(H / 2);
+
+        // Draw star field
+        for (const s of systems) {
+            const sx = Math.floor(s.pos.x + cx);
+            const sy = Math.floor(s.pos.y + cy);
+            if (sx < 0 || sx >= W || sy < 0 || sy >= H) continue;
+
+            let glyph = '·';
+            let fg = '#888';
+            if (s.star && s.star.primary) {
+                const st = s.star.primary.spectral;
+                if (st) {
+                    if (st.startsWith('O') || st.startsWith('B')) { glyph = '*'; fg = '#9af'; }
+                    else if (st.startsWith('A') || st.startsWith('F')) { glyph = '*'; fg = '#bff'; }
+                    else if (st.startsWith('G') || st.startsWith('K')) { glyph = '∘'; fg = '#ffd'; }
+                    else { glyph = '·'; fg = '#f80'; }
+                }
+            }
+            // Habitable candidates get a ring
+            if (s.star && s.star.primary && s.star.primary.habitable) {
+                glyph = '⊙';
+                fg = '#0f0';
+            }
+            this.display.draw(sx, sy, glyph, fg);
+        }
+
+        // Crosshair
+        this.display.draw(cx, cy, '+', '#fff');
+        toast(`Sector ${this.sectorSeed} — ${systems.length} systems`);
     }
 
-    set dialog(what) {
-        this.state.newData = undefined
-        this.state.selected = ""
-        this.updateState("dialog", what)
+    _renderSystem() {
+        this.view = 'system';
+        this.map = generateSystem(this.systemSeed || this.sectorSeed, {});
+        this.currentSystem = this.map;
+        this.display.clear();
+        this._updateInfo();
+
+        const sys = this.map;
+        if (!sys || !sys.star) {
+            toast('No system data');
+            return;
+        }
+
+        const cx = 50;
+        const cy = 20;
+
+        // Draw star
+        const st = sys.star.primary;
+        let glyph = '*';
+        let fg = '#ff0';
+        if (st && st.spectral) {
+            const s = st.spectral;
+            if (s[0] === 'O' || s[0] === 'B') { glyph = '*'; fg = '#9af'; }
+            else if (s[0] === 'A' || s[0] === 'F') { glyph = '*'; fg = '#bff'; }
+            else if (s[0] === 'G' || s[0] === 'K') { glyph = '*'; fg = '#ffd'; }
+            else { glyph = '·'; fg = '#f80'; }
+        }
+        this.display.draw(cx, cy, glyph, fg);
+
+        // Draw planets in a row
+        const planets = sys.planets || [];
+        const spacing = 8;
+        const baseX = 10;
+        for (let i = 0; i < planets.length; i++) {
+            const p = planets[i];
+            const px = baseX + i * spacing;
+            const py = cy + 6;
+
+            let pglyph = '∘';
+            let pfg = '#aaa';
+            if (p.classification === 'gas giant') {
+                pglyph = '○';
+                pfg = '#8cf';
+            } else if (p.HI >= 3 && p.HI <= 4) {
+                pglyph = '●';
+                pfg = '#fc0';
+            } else if (p.HI >= 1 && p.HI <= 2) {
+                pglyph = '●';
+                pfg = '#0f0';
+            } else {
+                pglyph = '·';
+                pfg = '#666';
+            }
+            this.display.draw(px, py, pglyph, pfg);
+            // Label
+            this.display.draw(px, py + 2, String(i + 1), '#fff');
+        }
+
+        toast(`System ${this.systemSeed} — ${planets.length} planets`);
     }
 
-    get dialog() {
-        let [what, id] = this.state.dialog.split(".")
-        return what == "" ? "" : UI.Dialog(this)
+    _updateInfo() {
+        if (!this._infoControllers) return;
+        if (this.view === 'sector' && this.map) {
+            this._infoControllers.systemName.setValue('—');
+            this._infoControllers.starType.setValue('—');
+            this._infoControllers.planets.setValue(String(this.map.systems.length));
+            this._infoControllers.hi.setValue('—');
+        } else if (this.view === 'system' && this.currentSystem) {
+            const sys = this.currentSystem;
+            this._infoControllers.systemName.setValue(String(this.systemSeed));
+            this._infoControllers.starType.setValue(sys.star && sys.star.primary ? sys.star.primary.spectral || '—' : '—');
+            this._infoControllers.planets.setValue(String((sys.planets || []).length));
+            this._infoControllers.hi.setValue('—');
+        }
     }
 
-    cancel() {
-        this.show = ""
-        this.dialog = "Main"
+    // ── Click ──────────────────────────────────────────────────────
+    _onClick(ev) {
+        if (!this.display) return;
+        const container = this.display.getContainer();
+        const rect = container.getBoundingClientRect();
+        const x = Math.floor((ev.clientX - rect.left) / rect.width * this.display._options.width);
+        const y = Math.floor((ev.clientY - rect.top) / rect.height * this.display._options.height);
+
+        if (this.view === 'sector' && this.map) {
+            this._onSectorClick(x, y);
+        } else if (this.view === 'system' && this.currentSystem) {
+            this._onSystemClick(x, y);
+        }
     }
 
-    render({ }, { info }) {
-        return html`
-	<div class="fixed top-0 left-0 w-100 h-100">
-      <div id="threeHost"></div>
-      <div id="overlay" class="z-1 absolute top-0 left-0 pa2">${info}</div>
-      ${this.show}
-    </div>
-    ${this.dialog}
-    `
+    _onSectorClick(x, y) {
+        const { systems, H, W } = this.map;
+        const cx = Math.floor(W / 2);
+        const cy = Math.floor(H / 2);
+
+        // Find nearest star
+        let best = null;
+        let bestDist = Infinity;
+        for (const s of systems) {
+            const sx = Math.floor(s.pos.x + cx);
+            const sy = Math.floor(s.pos.y + cy);
+            const dx = sx - x;
+            const dy = sy - y;
+            const d = dx * dx + dy * dy;
+            if (d < bestDist) {
+                bestDist = d;
+                best = s;
+            }
+        }
+
+        if (best && bestDist < 25) {
+            this.systemSeed = best.seed;
+            this._renderSystem();
+            toast(`Jumping to ${best.name || 'system ' + best.seed}`);
+        }
+    }
+
+    _onSystemClick(x, y) {
+        // Detect planet click
+        const sys = this.currentSystem;
+        if (!sys || !sys.planets) return;
+        const spacing = 8;
+        const baseX = 10;
+        const cy = 20;
+        for (let i = 0; i < sys.planets.length; i++) {
+            const px = baseX + i * spacing;
+            const py = cy + 6;
+            if (Math.abs(px - x) < 4 && Math.abs(py - y) < 4) {
+                toast(`Planet ${i + 1} — HI ${sys.planets[i].HI}`);
+                return;
+            }
+        }
     }
 }
 
-function reportWindowSize() {
-    App.gui.what.display();
-}
-
-window.onresize = reportWindowSize;
-
-render(html`<${App}/>`, document.body);
+// ── Boot ─────────────────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', () => {
+    App = new RogueApp();
+    App.init().catch(err => {
+        console.error(err);
+        toast('Error: ' + err.message);
+    });
+});

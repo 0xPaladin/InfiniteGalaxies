@@ -1,7 +1,9 @@
+import { PRNG } from './random.js';
+
 /* global module */
 var badwords = ["4r5e", "5h1t", "5hit", "a55", "anal", "anus", "ar5e", "arrse", "arse", "ass", "ass-fucker", "asses", "assfucker", "assfukka", "asshole", "assholes", "asswhole", "a_s_s", "b!tch", "b00bs", "b17ch", "b1tch", "ballbag", "balls", "ballsack", "bastard", "beastial", "beastiality", "bellend", "bestial", "bestiality", "bi+ch", "biatch", "bitch", "bitcher", "bitchers", "bitches", "bitchin", "bitching", "bloody", "blowjob", "blowjob", "blowjobs", "boiolas", "bollock", "bollok", "boner", "boob", "boobs", "booobs", "boooobs", "booooobs", "booooooobs", "breasts", "buceta", "bugger", "bum", "bunnyfucker", "butt", "butthole", "buttmuch", "buttplug", "c0ck", "c0cksucker", "carpetmuncher", "cawk", "chink", "cipa", "cl1t", "clit", "clitoris", "clits", "cnut", "cock", "cock-sucker", "cockface", "cockhead", "cockmunch", "cockmuncher", "cocks", "cocksuck", "cocksucked", "cocksucker", "cocksucking", "cocksucks", "cocksuka", "cocksukka", "cok", "cokmuncher", "coksucka", "coon", "cox", "crap", "cum", "cummer", "cumming", "cums", "cumshot", "cunilingus", "cunillingus", "cunnilingus", "cunt", "cuntlick", "cuntlicker", "cuntlicking", "cunts", "cyalis", "cyberfuc", "cyberfuck", "cyberfucked", "cyberfucker", "cyberfuckers", "cyberfucking", "d1ck", "damn", "dick", "dickhead", "dildo", "dildos", "dink", "dinks", "dirsa", "dlck", "dog-fucker", "doggin", "dogging", "donkeyribber", "doosh", "duche", "dyke", "ejaculate", "ejaculated", "ejaculates", "ejaculating", "ejaculatings", "ejaculation", "ejakulate", "fuck", "fucker", "f4nny", "fag", "fagging", "faggitt", "faggot", "faggs", "fagot", "fagots", "fags", "fanny", "fannyflaps", "fannyfucker", "fanyy", "fatass", "fcuk", "fcuker", "fcuking", "feck", "fecker", "felching", "fellate", "fellatio", "fingerfuck", "fingerfucked", "fingerfucker", "fingerfuckers", "fingerfucking", "fingerfucks", "fistfuck", "fistfucked", "fistfucker", "fistfuckers", "fistfucking", "fistfuckings", "fistfucks", "flange", "fook", "fooker", "fuck", "fucka", "fucked", "fucker", "fuckers", "fuckhead", "fuckheads", "fuckin", "fucking", "fuckings", "fuckingshitmotherfucker", "fuckme", "fucks", "fuckwhit", "fuckwit", "fudgepacker", "fudgepacker", "fuk", "fuker", "fukker", "fukkin", "fuks", "fukwhit", "fukwit", "fux", "fux0r", "f_u_c_k", "gangbang", "gangbanged", "gangbangs", "gaylord", "gaysex", "goatse", "God", "god-dam", "god-damned", "goddamn", "goddamned", "hardcoresex", "hell", "heshe", "hoar", "hoare", "hoer", "homo", "hore", "horniest", "horny", "hotsex", "jack-off", "jackoff", "jap", "jerk-off", "jism", "jiz", "jizm", "jizz", "kawk", "knob", "knobead", "knobed", "knobend", "knobhead", "knobjocky", "knobjokey", "kock", "kondum", "kondums", "kum", "kummer", "kumming", "kums", "kunilingus", "l3i+ch", "l3itch", "labia", "lmfao", "lust", "lusting", "m0f0", "m0fo", "m45terbate", "ma5terb8", "ma5terbate", "masochist", "master-bate", "masterb8", "masterbat*", "masterbat3", "masterbate", "masterbation", "masterbations", "masturbate", "mo-fo", "mof0", "mofo", "mothafuck", "mothafucka", "mothafuckas", "mothafuckaz", "mothafucked", "mothafucker", "mothafuckers", "mothafuckin", "mothafucking", "mothafuckings", "mothafucks", "motherfucker", "motherfuck", "motherfucked", "motherfucker", "motherfuckers", "motherfuckin", "motherfucking", "motherfuckings", "motherfuckka", "motherfucks", "muff", "mutha", "muthafecker", "muthafuckker", "muther", "mutherfucker", "n1gga", "n1gger", "nazi", "nigg3r", "nigg4h", "nigga", "niggah", "niggas", "niggaz", "nigger", "niggers", "nob", "nobjokey", "nobhead", "nobjocky", "nobjokey", "numbnuts", "nutsack", "orgasim", "orgasims", "orgasm", "orgasms", "p0rn", "pawn", "pecker", "penis", "penisfucker", "phonesex", "phuck", "phuk", "phuked", "phuking", "phukked", "phukking", "phuks", "phuq", "pigfucker", "pimpis", "piss", "pissed", "pisser", "pissers", "pisses", "pissflaps", "pissin", "pissing", "pissoff", "poop", "porn", "porno", "pornography", "pornos", "prick", "pricks", "pron", "pube", "pusse", "pussi", "pussies", "pussy", "pussys", "rectum", "retard", "rimjaw", "rimming", "shit", "s.o.b.", "sadist", "schlong", "screwing", "scroat", "scrote", "scrotum", "semen", "sex", "sh!+", "sh!t", "sh1t", "shag", "shagger", "shaggin", "shagging", "shemale", "shi+", "shit", "shitdick", "shite", "shited", "shitey", "shitfuck", "shitfull", "shithead", "shiting", "shitings", "shits", "shitted", "shitter", "shitters", "shitting", "shittings", "shitty", "skank", "slut", "sluts", "smegma", "smut", "snatch", "son-of-a-bitch", "spac", "spunk", "s_h_i_t", "t1tt1e5", "t1tties", "teets", "teez", "testical", "testicle", "tit", "titfuck", "tits", "titt", "tittie5", "tittiefucker", "titties", "tittyfuck", "tittywank", "titwank", "tosser", "turd", "tw4t", "twat", "twathead", "twatty", "twunt", "twunter", "v14gra", "v1gra", "vagina", "viagra", "vulva", "w00se", "wang", "wank", "wanker", "wanky", "whoar", "whore", "willies", "willy", "xrated", "xxx"];
 
-const hasBadWord = function(s) {
+const hasBadWord = function (s) {
   for (var idx = 0; idx < badwords.length; idx++) {
     if (s.indexOf(badwords[idx]) > -1) {
       return true;
@@ -10,7 +12,7 @@ const hasBadWord = function(s) {
   return false;
 };
 
-const isBadWord = s=>badwords.indexOf(s) > -1 || hasBadWord(s);
+const isBadWord = s => badwords.indexOf(s) > -1 || hasBadWord(s);
 
 /*
   Pieces of star and similar names designed to allow random fabrication of plausible star names -- seems to work well!
@@ -22,41 +24,41 @@ var name_parts = {
   secondary: ["Major", "Minor", "Secundus", "Tertius", "Quartus", "Quintus", "Septimus", "Octavus", "Nonus", "Decimus"]
 };
 
-function random_name(PRNG, number_of_syllables, allow_second_name, allow_secondary) {
+function random_name(rng, number_of_syllables, allow_second_name, allow_secondary) {
   let syllables = [], name, suffix;
-  syllables.push(PRNG.pickone(name_parts.prefix));
+  syllables.push(rng.pick(name_parts.prefix));
   for (let j = 2; j < number_of_syllables; j++) {
-    syllables.push(PRNG.pickone(name_parts.middle));
+    syllables.push(rng.pick(name_parts.middle));
   }
-  syllables.push(PRNG.pickone(name_parts.suffix));
+  syllables.push(rng.pick(name_parts.suffix));
   name = syllables.join('');
-  suffix = PRNG.weighted(['', 'first-name', 'second-name', 'secondary'], [8, 1, 1, 4]);
+  suffix = rng.weighted(['', 'first-name', 'second-name', 'secondary'], [8, 1, 1, 4]);
   switch (suffix) {
-  case 'first-name':
-    if (allow_second_name !== false) {
-      name = _.capitalize(random_name(PRNG, PRNG.randBetween(2,number_of_syllables), false, false)) + " " + name;
-    }
-    break;
-  case 'second-name':
-    if (allow_second_name !== false) {
-      name = name + " " + _.capitalize(random_name(PRNG, PRNG.randBetween(2,number_of_syllables), false));
-    }
-    break;
-  case 'secondary':
-    if (allow_secondary !== false) {
-      name += " " + PRNG.pickone(name_parts.secondary);
-    }
-    break;
+    case 'first-name':
+      if (allow_second_name !== false) {
+        name = _.capitalize(random_name(rng, Math.floor(rng.range(2, number_of_syllables)), false, false)) + " " + name;
+      }
+      break;
+    case 'second-name':
+      if (allow_second_name !== false) {
+        name = name + " " + _.capitalize(random_name(rng, Math.floor(rng.range(2, number_of_syllables)), false));
+      }
+      break;
+    case 'secondary':
+      if (allow_secondary !== false) {
+        name += " " + rng.pick(name_parts.secondary);
+      }
+      break;
   }
   return _.capitalize(name);
 }
 
-let MakeName = (_names,RNG=chance)=>{
-  var number_of_syllables = Math.floor(RNG.random() * 2 + 2), new_name;
+let MakeName = (_names, rng = new PRNG(Date.now())) => {
+  var number_of_syllables = Math.floor(rng.rand() * 2 + 2), new_name;
   //generate a unique name without badwords
   while (true) {
-    new_name = random_name(RNG, number_of_syllables);
-    if (_names.indexOf(new_name) >= 0 || isBadWord(new_name)) {} else {
+    new_name = random_name(rng, number_of_syllables);
+    if (_names.indexOf(new_name) >= 0 || isBadWord(new_name)) { } else {
       break;
     }
   }
@@ -64,4 +66,5 @@ let MakeName = (_names,RNG=chance)=>{
   return new_name
 }
 
-export {MakeName};
+export { MakeName };
+
