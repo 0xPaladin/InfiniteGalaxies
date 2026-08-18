@@ -1,3 +1,6 @@
+import { PRNG } from '../random.js';
+import { starTypeData } from '../constants/astrophysics.js';
+
 /**
  * Approximate main-sequence mass (M☉) from spectral type
  */
@@ -37,7 +40,7 @@ function samplePeriodYears(rng, primaryMass) {
   // μ ≈ 2.2 (≈ 160 yr) for solar-type; slightly lower for lower-mass
   const mu = 2.0 + 0.3 * Math.min(primaryMass, 1.5);
   const sigma = 1.6;
-  let logP = mu + (rng() + rng() + rng() + rng() - 2) * sigma; // rough normal
+  let logP = mu + (rng.rand() + rng.rand() + rng.rand() + rng.rand() - 2) * sigma; // rough normal
   logP = Math.max(-1.5, Math.min(6.5, logP)); // clamp ~ 0.03 yr → 3 Myr
   return Math.pow(10, logP);
 }
@@ -46,7 +49,7 @@ function samplePeriodYears(rng, primaryMass) {
  * Kepler’s 3rd law: a³ / P² = M_tot   (a in AU, P in years, M in M☉)
  */
 function periodToSeparation(periodYears, totalMass) {
-  return Math.pow(periodYears * periodYears * totalMass, 1/3);
+  return Math.pow(periodYears * periodYears * totalMass, 1 / 3);
 }
 
 /**
@@ -54,9 +57,9 @@ function periodToSeparation(periodYears, totalMass) {
  * Roughly flat with mild twin preference for closer systems
  */
 function sampleMassRatio(rng, isClose = false) {
-  let q = rng(); // 0–1
-  if (isClose && rng() < 0.25) {
-    q = 0.7 + rng() * 0.3; // twin boost
+  let q = rng.rand(); // 0–1
+  if (isClose && rng.p(0.25)) {
+    q = 0.7 + rng.rand() * 0.3; // twin boost
   }
   return Math.max(0.08, Math.min(0.98, q));
 }
@@ -74,39 +77,36 @@ export function generateStar(rng, options = {}) {
   // --- Spectral type of primary ---
   const spectralTable = [
     { type: 'O', weight: 0.00003, multBias: 0.95 },
-    { type: 'B', weight: 0.0013,  multBias: 0.88 },
-    { type: 'A', weight: 0.006,   multBias: 0.70 },
-    { type: 'F', weight: 0.03,    multBias: 0.55 },
-    { type: 'G', weight: 0.076,   multBias: 0.50 },
-    { type: 'K', weight: 0.12,    multBias: 0.40 },
-    { type: 'M', weight: 0.766,   multBias: 0.28 }
+    { type: 'B', weight: 0.0013, multBias: 0.88 },
+    { type: 'A', weight: 0.006, multBias: 0.70 },
+    { type: 'F', weight: 0.03, multBias: 0.55 },
+    { type: 'G', weight: 0.076, multBias: 0.50 },
+    { type: 'K', weight: 0.12, multBias: 0.40 },
+    { type: 'M', weight: 0.766, multBias: 0.28 }
   ];
 
   let primaryType;
   if (options.forcedType) {
     primaryType = options.forcedType;
   } else if (options.forceHabitable) {
-    const hab = [
-      { type: 'F', weight: 0.25 },
-      { type: 'G', weight: 0.45 },
-      { type: 'K', weight: 0.30 }
-    ];
-    primaryType = weightedPick(hab, rng);
+    primaryType = rng.weighted(['F', 'G', 'K'], [25, 45, 30]);
   } else {
-    primaryType = weightedPick(spectralTable, rng);
+    primaryType = rng.weighted(spectralTable.map(s => s.type), spectralTable.map(s => s.weight));
   }
 
   const primaryMass = spectralToMass(primaryType);
+  const luminosity = starTypeData[primaryType].luminosity;
   const primary = {
     role: 'primary',
     spectral: primaryType,
-    lumClass: rng() < 0.92 ? 'V' : (rng() < 0.65 ? 'III' : 'IV'),
+    luminosity,
+    lumClass: rng.p(0.92) ? 'V' : (rng.p(0.65) ? 'III' : 'IV'),
     mass: +primaryMass.toFixed(3)
   };
 
   // --- Multiplicity decision ---
   const bias = spectralTable.find(s => s.type === primaryType)?.multBias ?? 0.3;
-  const roll = rng();
+  const roll = rng.rand();
   let multiplicity = 1;
   if (roll < bias * 0.55) multiplicity = 2;
   else if (roll < bias * 0.72) multiplicity = 3;
@@ -118,7 +118,7 @@ export function generateStar(rng, options = {}) {
   // Generate companions (hierarchical for triples+)
   for (let i = 1; i < multiplicity; i++) {
     const isOuter = i > 1; // outer companions get larger separations
-    const period = samplePeriodYears(rng, primaryMass) * (isOuter ? (8 + rng() * 40) : 1);
+    const period = samplePeriodYears(rng, primaryMass) * (isOuter ? (8 + rng.rand() * 40) : 1);
     const q = sampleMassRatio(rng, period < 30);
     const compMass = currentPrimaryMass * q;
     const totalMass = currentPrimaryMass + compMass;
@@ -139,29 +139,18 @@ export function generateStar(rng, options = {}) {
   }
 
   const isHabitableCandidate = !!options.forceHabitable ||
-    (['F','G','K'].includes(primaryType) &&
-     primary.lumClass === 'V' &&
-     multiplicity === 1 &&
-     rng() < 0.18);
+    (['F', 'G', 'K'].includes(primaryType) &&
+      primary.lumClass === 'V' &&
+      multiplicity === 1 &&
+      rng.p(0.18));
 
   return {
     primary,
+    luminosity,
     companions,
     multiplicity,
     isHabitableCandidate,
     // convenience totals
     totalMass: +(primary.mass + companions.reduce((s, c) => s + c.mass, 0)).toFixed(3),
-    x: null,
-    y: null
   };
-}
-
-function weightedPick(table, rng) {
-  const total = table.reduce((s, t) => s + t.weight, 0);
-  let r = rng() * total;
-  for (const item of table) {
-    r -= item.weight;
-    if (r <= 0) return item.type;
-  }
-  return table[table.length - 1].type;
 }
