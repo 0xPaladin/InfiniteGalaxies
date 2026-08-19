@@ -1,5 +1,7 @@
 import aleaPRNG from '../../lib/aleaPRNG-1.1.js';
 
+export { aleaPRNG };
+
 export class PRNG {
   constructor(seed, type = "alea") {
     this.prng = type === 'alea' ? aleaPRNG(seed) : mulberry32(seed);

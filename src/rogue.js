@@ -8,6 +8,9 @@ import { GUI } from 'https://cdn.jsdelivr.net/npm/lil-gui@0.21/+esm';
 import { PRNG } from './engine/random.js';
 import { generateSector } from './engine/galaxy/sector.js';
 import { generateSystem } from './engine/galaxy/system.js';
+import { generateMap as genPlanetMap } from './engine/galaxy/planetMap/index.js';
+
+console.log(genPlanetMap())
 
 // ── Rogue Map─────────────────────────────────────────────────────────
 import { RogueSector } from './engine/rogue/sector.js';
