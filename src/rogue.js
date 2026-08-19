@@ -6,6 +6,10 @@ import { PRNG } from './engine/random.js';
 import { generateSector } from './engine/galaxy/sector.js';
 import { generateSystem } from './engine/galaxy/system.js';
 
+// ── Rogue Map─────────────────────────────────────────────────────────
+import {RogueSector} from './engine/rogue/sector.js';
+import {RogueSystem} from './engine/rogue/system.js';
+
 // ── Globals ──────────────────────────────────────────────────────────
 const DB_KEY = 'rogue-galaxies';
 let App = null;
@@ -111,7 +115,7 @@ class RogueApp {
         genFolder.add(this, '_genNewSector').name('New Sector');
         genFolder.add(this, '_genNewSystem').name('New System');
         genFolder.add(this, '_saveGame').name('Save');
-        genFolder.add(this, '_loadGame').name('Load');
+        genFolder.add(thRogueSectoris, '_loadGame').name('Load');
         genFolder.add(this, '_deleteSave').name('Delete Save');
 
         // Info
@@ -171,33 +175,15 @@ class RogueApp {
         this.display.clear();
         this._updateInfo();
 
-        const { systems, H, W } = this.map;
-        const cx = Math.floor(W / 2);
-        const cy = Math.floor(H / 2);
+        const {map, glyphs } = RogueSector(this.map);
 
         // Draw star field
-        for (const s of systems) {
-            const sx = Math.floor(s.pos.x + cx);
-            const sy = Math.floor(s.pos.y + cy);
-            if (sx < 0 || sx >= W || sy < 0 || sy >= H) continue;
+        for (const {xy, mapobj} of map) {
+            const [x,y] = xy.split(".").map(Number);
+            const {glyph} = mapobj;
+            const {fg,bg} = glyphs[glyph];
 
-            let glyph = '·';
-            let fg = '#888';
-            if (s.star && s.star.primary) {
-                const st = s.star.primary.spectral;
-                if (st) {
-                    if (st.startsWith('O') || st.startsWith('B')) { glyph = '*'; fg = '#9af'; }
-                    else if (st.startsWith('A') || st.startsWith('F')) { glyph = '*'; fg = '#bff'; }
-                    else if (st.startsWith('G') || st.startsWith('K')) { glyph = '∘'; fg = '#ffd'; }
-                    else { glyph = '·'; fg = '#f80'; }
-                }
-            }
-            // Habitable candidates get a ring
-            if (s.star && s.star.primary && s.star.primary.habitable) {
-                glyph = '⊙';
-                fg = '#0f0';
-            }
-            this.display.draw(sx, sy, glyph, fg);
+            this.display.draw(x, y, glyph, fg, bg);
         }
 
         // Crosshair
@@ -209,6 +195,7 @@ class RogueApp {
         this.view = 'system';
         this.map = generateSystem(this.systemSeed || this.sectorSeed, {});
         this.currentSystem = this.map;
+
         this.display.clear();
         this._updateInfo();
 
