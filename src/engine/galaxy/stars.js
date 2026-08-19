@@ -2,17 +2,42 @@ import { PRNG } from '../random.js';
 import { starTypeData } from '../constants/astrophysics.js';
 
 /**
+ * Calculates generalized Titius-Bode planetary distances for a given star mass.
+ * 
+ * @param {number} stellarMassSolar - Mass of the host star in solar masses (M_sun).
+ * @param {number} maxIndex - Maximum planet index/step (m value, e.g., 7 for Uranus).
+ * @returns {number[]} Array of predicted semi-major axes in Astronomical Units (AU).
+ */
+function calculateBodeDistancesForMass(stellarMassSolar, maxIndex = 15) {
+  let distances = [];
+
+  // Scaling factor modification: Protoplanetary disk scales loosely with stellar mass 
+  // root/cube relations. Default solar base uses factor ~1.0 for 1 solar mass.
+  let massScale = Math.pow(stellarMassSolar, 1 / 3);
+
+  // m = -Infinity (represented as index -2 here for Mercury logic), 0, 1, 2, ...
+  for (let m = -2; m <= maxIndex; m++) {
+    let term = (m === -2) ? 0 : Math.pow(2, m);
+    // Base classic formula coefficients (0.4 + 0.3 * 2^m) modulated by mass scale
+    let a_m = (0.4 + 0.3 * term) * massScale;
+    distances.push(Number(a_m.toFixed(3)));
+  }
+
+  return distances;
+}
+
+/**
  * Approximate main-sequence mass (M☉) from spectral type
  */
-function spectralToMass(type) {
+function spectralToMass(rng, type) {
   const map = {
-    'O': 20 + Math.random() * 20,   // very rough
-    'B': 3 + Math.random() * 12,
-    'A': 1.6 + Math.random() * 0.8,
-    'F': 1.1 + Math.random() * 0.4,
-    'G': 0.85 + Math.random() * 0.25,
-    'K': 0.5 + Math.random() * 0.3,
-    'M': 0.1 + Math.random() * 0.4
+    'O': 20 + rng.rand() * 20,   // very rough
+    'B': 3 + rng.rand() * 12,
+    'A': 1.6 + rng.rand() * 0.8,
+    'F': 1.1 + rng.rand() * 0.4,
+    'G': 0.85 + rng.rand() * 0.25,
+    'K': 0.5 + rng.rand() * 0.3,
+    'M': 0.1 + rng.rand() * 0.4
   };
   return map[type] || 0.5;
 }
@@ -94,7 +119,7 @@ export function generateStar(rng, options = {}) {
     primaryType = rng.weighted(spectralTable.map(s => s.type), spectralTable.map(s => s.weight));
   }
 
-  const primaryMass = spectralToMass(primaryType);
+  const primaryMass = spectralToMass(rng, primaryType);
   const luminosity = starTypeData[primaryType].luminosity;
   const primary = {
     role: 'primary',
@@ -114,6 +139,7 @@ export function generateStar(rng, options = {}) {
 
   const companions = [];
   let currentPrimaryMass = primaryMass;
+  let binaryMass = primaryMass;
 
   // Generate companions (hierarchical for triples+)
   for (let i = 1; i < multiplicity; i++) {
@@ -135,7 +161,9 @@ export function generateStar(rng, options = {}) {
 
     // For hierarchical systems the “inner” mass can be treated as combined
     // (simplified – real hierarchy is more complex)
-    if (i === 1) currentPrimaryMass = totalMass;
+    if (i === 1) {
+      binaryMass = currentPrimaryMass = totalMass;
+    }
   }
 
   const isHabitableCandidate = !!options.forceHabitable ||
@@ -144,6 +172,10 @@ export function generateStar(rng, options = {}) {
       multiplicity === 1 &&
       rng.p(0.18));
 
+
+  const totalMass = +(primary.mass + companions.reduce((s, c) => s + c.mass, 0)).toFixed(3);
+  const orbits = calculateBodeDistancesForMass(multiplicity > 2 ? binaryMass : totalMass);
+
   return {
     primary,
     luminosity,
@@ -151,6 +183,7 @@ export function generateStar(rng, options = {}) {
     multiplicity,
     isHabitableCandidate,
     // convenience totals
-    totalMass: +(primary.mass + companions.reduce((s, c) => s + c.mass, 0)).toFixed(3),
+    totalMass,
+    orbits
   };
 }

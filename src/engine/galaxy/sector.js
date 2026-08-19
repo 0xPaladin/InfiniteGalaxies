@@ -53,17 +53,19 @@ export function generateSector(seed = Date.now(), opts = {}) {
     const system = generateSystem([seed, systems.length].join(':'), { forceHabitable: true });
     system.name = MakeName(names, rng);
     system.pos = bounds.r ? getSpherePosition(rng, bounds) : getPrismPosition(rng, bounds);
+    systems.push(system);
   }
 
   // -------------------------------------------------
   // 2. Add remaining stars/multiples → total 90–120
   // -------------------------------------------------
-  let nSystems = 90 + Math.floor(rng.rand() * 31); // 90–120
+  let nSystems = 0// 90 + Math.floor(rng.rand() * 31); // 90–120
   nSystems = opts.nSystems || nSystems;
   while (systems.length < nSystems) {
     const system = generateSystem([seed, systems.length].join(':'));
     system.name = MakeName(names, rng);
     system.pos = bounds.r ? getSpherePosition(rng, bounds) : getPrismPosition(rng, bounds);
+    systems.push(system);
   }
 
   return { systems, seed, H, W, D };

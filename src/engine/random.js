@@ -22,8 +22,11 @@ export class PRNG {
   }
 
   dice(ndx) {
-    const [n, d] = ndx.split('d').map(Number);
-    return Array.from({ length: n }, () => this.d(d)).reduce((s, val) => s + val, 0);
+    if (ndx === 0) return 0;
+
+    const [n, db] = ndx.split('d');
+    const [d, b = 0] = db.includes('+') ? db.split('+').map(Number) : db.split('-').map((v, i) => (i == 1 ? -1 : 1) * Number(v));
+    return b + Array.from({ length: Number(n) }, () => this.d(d)).reduce((s, val) => s + val, 0);
   }
 
   pick(arr) {

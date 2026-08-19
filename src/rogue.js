@@ -2,13 +2,16 @@
 // No Preact, no Chance. Uses ROT for ASCII display, lil-gui for controls,
 // localforage for persistence, PRNG for randomness.
 
+import "./engine/mixins.js"
+import { GUI } from 'https://cdn.jsdelivr.net/npm/lil-gui@0.21/+esm';
+
 import { PRNG } from './engine/random.js';
 import { generateSector } from './engine/galaxy/sector.js';
 import { generateSystem } from './engine/galaxy/system.js';
 
 // ── Rogue Map─────────────────────────────────────────────────────────
-import {RogueSector} from './engine/rogue/sector.js';
-import {RogueSystem} from './engine/rogue/system.js';
+import { RogueSector } from './engine/rogue/sector.js';
+import { RogueSystem } from './engine/rogue/system.js';
 
 // ── Globals ──────────────────────────────────────────────────────────
 const DB_KEY = 'rogue-galaxies';
@@ -54,13 +57,17 @@ class RogueApp {
         this.sectorSeed = null;
         this.systemSeed = null;
         this._resizeHandler = this._resizeHandler.bind(this);
+
+        //sector
+        this.nHab = 8;
+        this.totalSystems = 100;
     }
 
     // ── Lifecycle ──────────────────────────────────────────────────
     async init() {
         this.display = new ROT.Display({
             width: 100,
-            height: 40,
+            height: 100,
             font: 'monospace',
             fontSize: 14,
             spacing: 1,
@@ -80,7 +87,7 @@ class RogueApp {
         window.addEventListener('resize', this._resizeHandler);
 
         // lil-gui
-        this.gui = new lil.Gui({ title: 'Rogue Galaxies' });
+        this.gui = new GUI({ title: 'Rogue Galaxies' });
         this._buildGui();
 
         // Load saves
@@ -88,8 +95,7 @@ class RogueApp {
         this._populateLoadDropdown();
 
         // Generate initial sector
-        this.sectorSeed = Math.floor(ROT.RNG.uniform() * 1e9);
-        this._renderSector();
+        this._genNewSector();
     }
 
     _resizeHandler() {
@@ -100,41 +106,29 @@ class RogueApp {
     _buildGui() {
         const g = this.gui;
 
-        // View folder
-        const viewFolder = g.addFolder('View');
-        viewFolder.add(this, 'view', ['sector', 'system']).name('Mode').onChange((v) => {
-            if (v === 'system' && this.currentSystem) {
-                this._renderSystem();
-            } else {
-                this._renderSector();
-            }
-        });
-
         // Generate folder
         const genFolder = g.addFolder('Generate');
         genFolder.add(this, '_genNewSector').name('New Sector');
         genFolder.add(this, '_genNewSystem').name('New System');
         genFolder.add(this, '_saveGame').name('Save');
-        genFolder.add(thRogueSectoris, '_loadGame').name('Load');
+        genFolder.add(this, '_loadGame').name('Load');
         genFolder.add(this, '_deleteSave').name('Delete Save');
 
-        // Info
-        const infoFolder = g.addFolder('Info');
+        this.sectorFolder = g.addFolder('Sector');
+        this.systemFolder = g.addFolder('System');
+        this.infoFolder = g.addFolder('Info');
         this._infoControllers = {};
-        this._infoControllers.systemName = infoFolder.add({ v: '—' }, 'v').name('System').disable();
-        this._infoControllers.starType = infoFolder.add({ v: '—' }, 'v').name('Star Type').disable();
-        this._infoControllers.planets = infoFolder.add({ v: '—' }, 'v').name('Planets').disable();
-        this._infoControllers.hi = infoFolder.add({ v: '—' }, 'v').name('HI').disable();
+        this.viewFolder = g.addFolder('View');
     }
 
     _genNewSector() {
-        this.sectorSeed = Math.floor(ROT.RNG.uniform() * 1e9);
+        this.sectorSeed = crypto.randomUUID();
         this._renderSector();
         toast('New sector generated');
     }
 
     _genNewSystem() {
-        this.systemSeed = Math.floor(ROT.RNG.uniform() * 1e9);
+        this.systemSeed = crypto.randomUUID();
         this._renderSystem();
         toast('New system generated');
     }
@@ -166,34 +160,34 @@ class RogueApp {
 
     // ── Rendering ──────────────────────────────────────────────────
     _renderSector() {
+        const { nHab, totalSystems } = this;
+
         this.view = 'sector';
         this.currentSystem = null;
         this.map = generateSector(this.sectorSeed, {
-            bounds: { w: 100, h: 100, d: 100 }
+            bounds: { w: 1000, h: 1000, d: 1000 },
+            nHab,
+            nSystems: totalSystems
         });
 
         this.display.clear();
         this._updateInfo();
+        this.display.setOptions({
+            width: 100,
+            height: 100,
+            fontSize: 8
+        });
 
-        const {map, glyphs } = RogueSector(this.map);
+        //do the display 
+        RogueSector(this.map, this.display);
 
-        // Draw star field
-        for (const {xy, mapobj} of map) {
-            const [x,y] = xy.split(".").map(Number);
-            const {glyph} = mapobj;
-            const {fg,bg} = glyphs[glyph];
-
-            this.display.draw(x, y, glyph, fg, bg);
-        }
-
-        // Crosshair
-        this.display.draw(cx, cy, '+', '#fff');
-        toast(`Sector ${this.sectorSeed} — ${systems.length} systems`);
+        toast(`Sector ${this.sectorSeed} — ${this.map.systems.length} systems`);
+        return console.log(this.map);
     }
 
     _renderSystem() {
         this.view = 'system';
-        this.map = generateSystem(this.systemSeed || this.sectorSeed, {});
+        this.map = this.map.seed === this.systemSeed ? this.map : generateSystem(this.systemSeed || this.sectorSeed, {});
         this.currentSystem = this.map;
 
         this.display.clear();
@@ -205,67 +199,32 @@ class RogueApp {
             return;
         }
 
-        const cx = 50;
-        const cy = 20;
+        //do the display
+        RogueSystem(this.map, this.display)
 
-        // Draw star
-        const st = sys.star.primary;
-        let glyph = '*';
-        let fg = '#ff0';
-        if (st && st.spectral) {
-            const s = st.spectral;
-            if (s[0] === 'O' || s[0] === 'B') { glyph = '*'; fg = '#9af'; }
-            else if (s[0] === 'A' || s[0] === 'F') { glyph = '*'; fg = '#bff'; }
-            else if (s[0] === 'G' || s[0] === 'K') { glyph = '*'; fg = '#ffd'; }
-            else { glyph = '·'; fg = '#f80'; }
-        }
-        this.display.draw(cx, cy, glyph, fg);
-
-        // Draw planets in a row
-        const planets = sys.planets || [];
-        const spacing = 8;
-        const baseX = 10;
-        for (let i = 0; i < planets.length; i++) {
-            const p = planets[i];
-            const px = baseX + i * spacing;
-            const py = cy + 6;
-
-            let pglyph = '∘';
-            let pfg = '#aaa';
-            if (p.classification === 'gas giant') {
-                pglyph = '○';
-                pfg = '#8cf';
-            } else if (p.HI >= 3 && p.HI <= 4) {
-                pglyph = '●';
-                pfg = '#fc0';
-            } else if (p.HI >= 1 && p.HI <= 2) {
-                pglyph = '●';
-                pfg = '#0f0';
-            } else {
-                pglyph = '·';
-                pfg = '#666';
-            }
-            this.display.draw(px, py, pglyph, pfg);
-            // Label
-            this.display.draw(px, py + 2, String(i + 1), '#fff');
-        }
-
-        toast(`System ${this.systemSeed} — ${planets.length} planets`);
+        toast(`System ${this.systemSeed} — ${this.map.planets.length} planets`);
+        console.log(this.map);
     }
 
     _updateInfo() {
-        if (!this._infoControllers) return;
+        const g = this.gui;
+        const iC = this._infoControllers;
+
+        // Folders
+        this.sectorFolder ? this.sectorFolder.destroy() : null;
+        this.systemFolder ? this.systemFolder.destroy() : null;
+        this.infoFolder ? this.infoFolder.destroy() : null;
+        this.viewFolder ? this.viewFolder.destroy() : null;
+
+        this.infoFolder = g.addFolder('Info');
         if (this.view === 'sector' && this.map) {
-            this._infoControllers.systemName.setValue('—');
-            this._infoControllers.starType.setValue('—');
-            this._infoControllers.planets.setValue(String(this.map.systems.length));
-            this._infoControllers.hi.setValue('—');
-        } else if (this.view === 'system' && this.currentSystem) {
-            const sys = this.currentSystem;
-            this._infoControllers.systemName.setValue(String(this.systemSeed));
-            this._infoControllers.starType.setValue(sys.star && sys.star.primary ? sys.star.primary.spectral || '—' : '—');
-            this._infoControllers.planets.setValue(String((sys.planets || []).length));
-            this._infoControllers.hi.setValue('—');
+            const sf = this.sectorFolder = g.addFolder('Sector');
+            sf.add(this, 'sectorSeed').name('Seed').onFinishChange(v => this._renderSector());
+            sf.add(this, 'nHab', 0, 20, 1).name('# Habitable').onChange(v => this._renderSector());
+            sf.add(this, 'totalSystems', 20, 150, 2).name('# Total Systems').onChange(v => this._renderSector());
+        }
+        else if (this.view === 'system' && this.currentSystem) {
+
         }
     }
 
@@ -273,57 +232,22 @@ class RogueApp {
     _onClick(ev) {
         if (!this.display) return;
         const container = this.display.getContainer();
-        const rect = container.getBoundingClientRect();
-        const x = Math.floor((ev.clientX - rect.left) / rect.width * this.display._options.width);
-        const y = Math.floor((ev.clientY - rect.top) / rect.height * this.display._options.height);
 
-        if (this.view === 'sector' && this.map) {
-            this._onSectorClick(x, y);
-        } else if (this.view === 'system' && this.currentSystem) {
-            this._onSystemClick(x, y);
-        }
-    }
+        const [x, y] = this.display.eventToPosition(ev);
+        const obj = this.map.tiles.get([x, y].join(','));
 
-    _onSectorClick(x, y) {
-        const { systems, H, W } = this.map;
-        const cx = Math.floor(W / 2);
-        const cy = Math.floor(H / 2);
-
-        // Find nearest star
-        let best = null;
-        let bestDist = Infinity;
-        for (const s of systems) {
-            const sx = Math.floor(s.pos.x + cx);
-            const sy = Math.floor(s.pos.y + cy);
-            const dx = sx - x;
-            const dy = sy - y;
-            const d = dx * dx + dy * dy;
-            if (d < bestDist) {
-                bestDist = d;
-                best = s;
-            }
-        }
-
-        if (best && bestDist < 25) {
-            this.systemSeed = best.seed;
+        if (this.view === 'sector' && obj) {
+            this.map = obj;
+            this.systemSeed = obj.seed;
+            toast(`Jumping to ${obj.name || 'system ' + obj.seed}`);
             this._renderSystem();
-            toast(`Jumping to ${best.name || 'system ' + best.seed}`);
-        }
-    }
-
-    _onSystemClick(x, y) {
-        // Detect planet click
-        const sys = this.currentSystem;
-        if (!sys || !sys.planets) return;
-        const spacing = 8;
-        const baseX = 10;
-        const cy = 20;
-        for (let i = 0; i < sys.planets.length; i++) {
-            const px = baseX + i * spacing;
-            const py = cy + 6;
-            if (Math.abs(px - x) < 4 && Math.abs(py - y) < 4) {
-                toast(`Planet ${i + 1} — HI ${sys.planets[i].HI}`);
-                return;
+        } else if (this.view === 'system' && obj) {
+            console.log(obj);
+            if (obj.parent) {
+                toast(`Planet ${obj.i + 1} — HI ${obj.HI}`);
+            }
+            else {
+                toast(`Star - ${obj.role}`);
             }
         }
     }

@@ -1,31 +1,26 @@
 import { SPECTRAL_COLORS } from '../constants/defaults.js';
 
-const GLYPHS = {
-    '.': { type: 'empty space', fg: '#D3D3D3', bg: '#000000' },
-};
+export function RogueSector(sector, display, opts = {}) {
+    const { width, height } = display._options;
+    const step = sector.H / height;
 
-//create glyphs for stars
-Object.entries(SPECTRAL_COLORS).forEach((type, color) => {
-    GLYPHS[type] = { type: type + '-type Multiple', fg: '#FFFFFF', bg: color };
-    GLYPHS[type.toLowerCase()] = { type: type + '-type', fg: '#FFFFFF', bg: color };
-});
-
-export function RogueSector(sector, opts) {
-    const { step = 10 } = opts;
-    const { W, D } = sector;
-
-    const map = new Map();
+    const tiles = new Map();
 
     //systems 
     sector.systems.forEach(sys => {
         const { primary, multiplicity } = sys.star;
-        const glyph = multiplicity > 1 ? primary.spectral.toLowerCase() : primary.spectral;
+        const glyph = multiplicity > 1 ? '☉' : '☀';
+        const fg = SPECTRAL_COLORS[primary.spectral];
 
         const { x, y } = sys.pos;
-        const xy = [Math.floor(x / step), Math.floor(y / step)].join('.');
+        const sx = Math.floor(x / step);
+        const sy = Math.floor(y / step);
 
-        map[xy] = { glyph, data };
+        const xy = [sx, sy].join(',');
+        tiles.set(xy, sys);
+
+        display.draw(sx, sy, glyph, fg);
     })
 
-    return { map, glyphs: GLYPHS };
+    sector.tiles = tiles;
 }

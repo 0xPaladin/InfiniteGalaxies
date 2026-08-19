@@ -4,7 +4,7 @@ import { generatePlanet } from './planet.js';
 
 const R_E = 6371;  //radius of earth in km 
 
-export function generateSystem(seed, opts) {
+export function generateSystem(seed, opts = {}) {
     const starOpts = {
         forceHabitable: opts.forceHabitable || false
     }
@@ -13,16 +13,16 @@ export function generateSystem(seed, opts) {
     }
     //primary star 
     const star = generateStar(new PRNG(seed + '-star'), starOpts);
-    const separation = star.multiplicity === 1 ? null : star.companions[0].separationAU;
 
     const system = { seed, star };
     const HI = [[], [], [], [], []];
     //generate planets
-    let basePlanetData = generateSystemPlanets(seed, star.primary.spectral, separation);
+    let basePlanetData = generateSystemPlanets(seed, star);
     system.planets = basePlanetData.map((p, i) => {
         //classification, radius, density, insolation (parent.star.luminosity), orbit 
 
         const planet = generatePlanet(system, {
+            i,
             classification: p.type === "gas giant" ? "gas giant" : "rocky",
             orbit: p.aAU,
             radius: p.radiusRE * 6371 / 1000, //convert from RE to raw km/1000 
@@ -47,7 +47,11 @@ export function generateSystem(seed, opts) {
  * @param {number} seed - Integer seed for reproducibility
  * @returns {Array<{type: string, periodDays: number, aAU: number, radiusRE: number}>}
  */
-export function generateSystemPlanets(seed, primaryType, companionSepAU = null) {
+export function generateSystemPlanets(seed, star) {
+    const primaryType = star.primary.spectral;
+    const companionSepAU = star.multiplicity === 1 ? null : star.companions[0].separationAU;
+    const orbits = star.orbits;
+
     const rand = new PRNG(seed);
     const type = (primaryType || "G").toUpperCase().charAt(0);
 
@@ -55,13 +59,13 @@ export function generateSystemPlanets(seed, primaryType, companionSepAU = null) 
     // Higher values = more planets of that class expected
     const baseRates = {
         //        small/rocky   gas giant
-        M: { small: 2.2, giant: 0.25 },
-        K: { small: 1.3, giant: 0.55 },
-        G: { small: 0.9, giant: 0.90 },
-        F: { small: 0.55, giant: 1.05 },
-        A: { small: 0.30, giant: 1.40 },
-        B: { small: 0.10, giant: 0.60 },
-        O: { small: 0.05, giant: 0.25 }
+        M: { small: '2d4', giant: '1d3-2' },
+        K: { small: '2d3', giant: '1d2' },
+        G: { small: '1d4+1', giant: '1d3' },
+        F: { small: '1d3-1', giant: '1d4' },
+        A: { small: '1d3-1', giant: '1d4' },
+        B: { small: 0, giant: '1d3-1' },
+        O: { small: 0, giant: '1d3-1' }
     };
 
     const rates = baseRates[type] || baseRates.G;
@@ -78,88 +82,43 @@ export function generateSystemPlanets(seed, primaryType, companionSepAU = null) 
         // wider than ~1500 AU → almost no suppression
     }
 
-    const smallRate = rates.small * suppression;
-    const giantRate = rates.giant * suppression;
+    let smallRate = rand.dice(rates.small) * suppression;
+    let giantRate = rand.dice(rates.giant) * suppression;
 
     // Expected number of planets (Poisson-ish via sequential draws)
     // Cap total planets for realism
-    const maxPlanets = 8;
+    const maxPlanets = 10;
     const planets = [];
 
-    // Helper: draw period (days) with a rough power-law bias toward shorter periods
-    function drawPeriod(isGiant) {
-        // Simple log-uniform-ish with preference for shorter orbits
-        const minP = isGiant ? 3 : 0.5;
-        const maxP = isGiant ? 4000 : 400;
-        const u = rand.rand();
-        // Bias shorter: use power
-        const p = minP * Math.pow(maxP / minP, Math.pow(u, 0.65));
-        return Math.max(minP, Math.min(maxP, p));
-    }
-
-    // Approximate semi-major axis from period (Kepler's 3rd, assuming solar-mass scaling)
-    // Rough mass scaling by spectral type
-    const starMass = { M: 0.4, K: 0.7, G: 1.0, F: 1.3, A: 1.8, B: 5, O: 15 }[type] || 1.0;
-    function periodToAU(Pdays) {
-        const Pyears = Pdays / 365.25;
-        return Math.pow(Pyears * Pyears * starMass, 1 / 3);
-    }
-
     // Decide how many small planets
-    let expectedSmall = smallRate * (0.7 + rand.rand() * 0.8); // some variance
-    while (expectedSmall > 0.15 && planets.length < maxPlanets) {
-        if (rand.rand() < Math.min(0.92, expectedSmall)) {
-            const P = drawPeriod(false);
-            const a = periodToAU(P);
-            // Radius: mostly 0.7–3.5 R⊕, occasional larger sub-Neptune
-            let r = 0.6 + rand.rand() * 2.4;
-            if (rand.rand() < 0.18) r = 2.8 + rand.rand() * 2.5; // sub-Neptune tail
-            planets.push({
-                type: r < 1.6 ? "rocky" : (r < 3.5 ? "super-Earth/sub-Neptune" : "Neptune-like"),
-                periodDays: +P.toFixed(2),
-                aAU: +a.toFixed(3),
-                radiusRE: +r.toFixed(2)
-            });
-        }
-        expectedSmall *= 0.55; // diminishing returns / packing
+    while (smallRate > 0 && planets.length < maxPlanets) {
+        const wiggle = rand.range(0.85, 1, 15);
+        const a = wiggle * orbits[planets.length];
+        // Radius: mostly 0.7–3.5 R⊕, occasional larger sub-Neptune
+        let r = 0.6 + rand.rand() * 2.4;
+        if (rand.rand() < 0.18) r = 2.8 + rand.rand() * 2.5; // sub-Neptune tail
+        planets.push({
+            type: r < 1.6 ? "rocky" : (r < 3.5 ? "super-Earth/sub-Neptune" : "Neptune-like"),
+            aAU: +a.toFixed(3),
+            radiusRE: +r.toFixed(2)
+        });
+        smallRate--;
     }
 
     // Decide gas giants (usually fewer)
-    let expectedGiant = giantRate * (0.6 + rand.rand() * 0.9);
-    while (expectedGiant > 0.12 && planets.length < maxPlanets) {
-        if (rand.rand() < Math.min(0.85, expectedGiant)) {
-            const P = drawPeriod(true);
-            const a = periodToAU(P);
-            // Giant radii ~ 8–14 R⊕ (inflated hot Jupiters can be larger)
-            let r = 8 + rand.rand() * 6;
-            if (P < 12 && rand.rand() < 0.4) r += 2 + rand.rand() * 4; // hot Jupiter inflation
-            planets.push({
-                type: "gas giant",
-                periodDays: +P.toFixed(1),
-                aAU: +a.toFixed(3),
-                radiusRE: +r.toFixed(1)
-            });
-        }
-        expectedGiant *= 0.35;
+    while (giantRate > 0 && planets.length < maxPlanets) {
+        const wiggle = rand.range(0.85, 1, 15);
+        const a = wiggle * orbits[planets.length];
+        // Giant radii ~ 8–14 R⊕ (inflated hot Jupiters can be larger)
+        let r = 8 + rand.rand() * 6;
+        if (a < 1 && rand.rand() < 0.4) r += 2 + rand.rand() * 4; // hot Jupiter inflation
+        planets.push({
+            type: "gas giant",
+            aAU: +a.toFixed(3),
+            radiusRE: +r.toFixed(1)
+        });
+        giantRate--;
     }
 
-    // Sort by orbital period (innermost first)
-    planets.sort((a, b) => a.periodDays - b.periodDays);
-
-    // Very crude dynamical cleanup: remove planets that are way too close to each other
-    // (simple period ratio check)
-    const cleaned = [];
-    for (const p of planets) {
-        if (cleaned.length === 0) {
-            cleaned.push(p);
-            continue;
-        }
-        const last = cleaned[cleaned.length - 1];
-        const ratio = p.periodDays / last.periodDays;
-        if (ratio > 1.25) { // rough Hill-stability-ish cut
-            cleaned.push(p);
-        }
-    }
-
-    return cleaned;
+    return planets;
 }

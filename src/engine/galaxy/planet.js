@@ -36,12 +36,12 @@ function generateMoon(parent, opts) {
 
     const template = planetTypeData[0];
     const type = template.classification;  // rocky
-    const color = RNG.pickone(RockyColors).name;
+    const color = RNG.pick(RockyColors).hex;
 
     let _r = parent.type == "rocky" || isMinor ? RNG.range(50, 2500) : RNG.range(template.radius[0], template.radius[1]);
     const radius = opts.radius ? opts.radius * 1000 : _r;
     const dense = RNG.range(template.density[0], template.density[1]);
-    const density = opts.density || _dense;
+    const density = opts.density || dense;
     const hydrographics = Number(template.hydrographics(RNG, parent.insolation, radius, density));
     const atmosphere = template.atmosphere(RNG, parent.insolation, radius, density, hydrographics);
 
@@ -73,7 +73,7 @@ export function generatePlanet(parent, opts = {}) {
     Object.assign(base, template.HI(base.insolation, radius, density, hydrographics, atmosphere));
 
     //color
-    const color = _type == "gas giant" ? [RNG.pick(GasGiantColors).name, RNG.pick(GasGiantColors).name] : _type == "rocky" ? RNG.pick(RockyColors).name : "brown";
+    const color = _type == "gas giant" ? [RNG.pick(GasGiantColors).hex, RNG.pick(GasGiantColors).hex] : _type == "rocky" ? [RNG.pick(RockyColors).hex] : "brown";
 
     //moons
     let nMajor = _type == "rocky" ? RNG.pick([0, 0, 1, 2]) : 1 + RNG.d(4);
@@ -85,9 +85,19 @@ export function generatePlanet(parent, opts = {}) {
         nMajor = Math.min(nMajor, total);
         nMinor = total - nMajor;
     }
+    const nm = nMajor + nMinor;
+
+    //orbit of moons 
+    const moon_weight = (Math.pow(nm, 2) + nm) * 0.5;
+    let io = base.rmin;
+    const orbits = Array.from({ length: 12 }, (v, i) => {
+        const rvar = RNG.range(0.5, 1);
+        io += i / moon_weight * rvar * (base.rmax - base.rmin);
+        return io;
+    })
 
     //update base
-    Object.assign(base, { type: _type, radius, density, hydrographics, atmosphere, color });
+    Object.assign(base, { type: _type, radius, density, hydrographics, atmosphere, color, orbits });
 
     const moonHI = [[], [], [], [], []];
     base.moons = Array.from({ length: nMajor + nMinor }, (_, j) => {
