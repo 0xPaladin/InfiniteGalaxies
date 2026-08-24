@@ -1,71 +1,251 @@
-# Plan: ASCII Roguelike Viewer (rogue.html)
+# Implementation Plan: Galaxy → Region → Population
 
-## Decisions
-- Separate page `rogue.html` (keep index.html 3D)
-- Drop Preact/htm entirely on rogue page; plain DOM + lil-gui + rot.js
-- `generateSector` (galaxy/sector.js) is the NEW STANDARD — pure object/API format
-- Engine/display separation: `galaxy/sector.js` = engine generation, `rogue/sector.js` = ASCII display
-- chanceJS removal = ROGUE PAGE ONLY: refactor `MakeName` to use PRNG (alea), default rng param to `new PRNG(Date.now())`. Keep chance in main.js/3D page.
-- 3D page rewire = ROGUE PAGE ONLY: use `generateSector` for rogue.html; leave 3D page on MajorSector
-- Fix generateSector bugs: `nhab`→`nHab`, use `getSpherePosition`, `rng()`→`rng.rand()`
-- Keep `sector_old.js` for reference (do NOT delete, do NOT import)
-- Defer planet>region>area>site drill-down (stub only)
+> **Goal**: Enable click-driven drill-down from Galaxy to Region level, integrating AFMGData for habitable
+> planets + regions, and preparing for a Conway-based population simulation before Phase 5.
 
-## Key facts
-- `generateSector(seed, {bounds})` in `galaxy/sector.js` returns `{systems, seed, H, W, D}`; each system `{seed, star:{primary:{spectral}, multiplicity, companions}, planets, HI, name, pos:{x,y,z}}`
-- `RogueSector(sector, opts)` in `engine/rogue/sector.js` maps systems to glyphs via `SPECTRAL_COLORS`; `GLYPHS` keyed by spectral letter (upper=multiple, lower=single)
-- rot.min.js: ROT.Display, ROT.Map, ROT.Engine, ROT.Scheduler, ROT.RNG, ROT.Color, ROT.FOV, ROT.Path, ROT.Noise, ROT.Text, ROT.Util (UMD global `ROT`)
-- `PRNG` (random.js): `rand/range/p/d/dice/pick/weighted`; `MakeName(names, rng)` in random_name.js
-- `window._` mixins (mixins.js): `_.fromN`, `_.clamp`, `_.html`, `_.hslToHex`, `_.capitalize`
-- `SPECTRAL_COLORS` in `constants/defaults.js`
-- galaxy-render exports NOT needed on rogue page (no Three.js)
+---
 
-## Steps
-### Phase A — Fix generateSector bugs + MakeName off chance (blocking, do first)
-1. Fix `generateSector` in `src/engine/galaxy/sector.js`: `nhab`→`nHab`, replace `getCirclePosition`/`getRectPosition` with `getSpherePosition`, `rng()`→`rng.rand()`. Export `generateSector`.
-2. Refactor `MakeName` in `src/engine/random_name.js` to use `PRNG` (alea): `RNG.random()`→`rng.rand()`, `RNG.pickone`→`rng.pick`, `RNG.weighted`→`rng.weighted`, `RNG.randBetween`→`rng.range`. Default rng param to `new PRNG(Date.now())`.
-3. Keep `sector_old.js` for reference. Keep `main.js`/3D page on `MajorSector` + chance.
+## Prerequisites
 
-### Phase B — Rogue page scaffold
-4. Rewrite `rogue.html`: load `lib/rot.min.js`, `lib/d3.v7.min.js`, `lib/lil-gui.0.20.js`, `lib/localforage.min.js`, `src/main.css`, `src/engine/render/threeHost.css`; module entry `src/rogue.js`. NO `chance.slim.js`.
-5. Rewrite `src/rogue.js`: drop Preact/htm. Plain `App` object. Import `generateSector` (engine), `RogueSector` (display), `PRNG`, `MakeName`, `SPECTRAL_COLORS`. Set `window.App`. Create `DB` (localforage "RogueGalaxies"). Create lil-gui.
+| Step | Task | Owner | ETA |
+|------|------|-------|-----|
+| P0 | Verify AFMGData works from `git@github.com:0xPaladin/AFMGData.git` | Dev | Day 0 |
+| P1 | Create `planet-type.js` interface that can route to AFMGData or in-house | Dev | Day 0.5 |
+| P2 | Draft seed-chaining utility (`deriveSeed(parent, path)`) | Dev | Day 0.5 |
 
-### Phase C — Sector ASCII view
-6. On load: generate a random sector via `generateSector(seed, {bounds:{r:50}})` (pure engine data, no Three.js). Store systems.
-7. Render sector with `ROT.Display` (~100×50). Map each system to a glyph by spectral class (reuse `RogueSector`/`GLYPHS`). Draw empty space `.` elsewhere.
-8. Click handling: `ROT.Display` `eventToPosition` → find system at tile → show basic data (name, spectral, multiplicity, #planets, habitable count) in a side info panel (plain DOM).
-9. Toast: on system click show a small toast "View system X?" Yes/No. Yes → enter system view.
+---
 
-### Phase D — System ASCII view
-10. System view: render star + planets as ASCII (star glyph center, planets by orbit) from the rogue system object.
-11. lil-gui: bind editable props (name, starClass, seed, #planets) to the system object; on change regenerate/redraw. "Back to Sector" nav.
-12. Stub `planet > region > area > site` drill-down: clicking a planet shows a placeholder panel.
+## Phase 0 — Phase 1: Rogue MVP (Click-Through Validation)
 
-### Phase E — Persistence (light)
-13. Save sector seed to localforage; "New Sector" button regenerates.
+### 0.1 Update entry point to support both modes
 
-## Relevant files
-- `src/engine/galaxy/sector.js` — fix + export `generateSector` (NEW STANDARD)
-- `src/engine/galaxy/sector_old.js` — keep for reference (do NOT delete, do NOT import)
-- `src/engine/rogue/sector.js` — display `RogueSector` (keep as-is)
-- `src/engine/random_name.js` — refactor `MakeName` off chance → PRNG/alea
-- `src/rogue.js` — rewrite (drop Preact, no chance)
-- `rogue.html` — rewrite (load rot.js, lil-gui; NO chance)
-- `src/engine/random.js` — `PRNG` (alea) source of truth
-- `src/engine/constants/defaults.js` — `SPECTRAL_COLORS`
-- `src/engine/mixins.js` — `_` mixins
+- [ ] Add command-line switch `--rogue` (or detect via `rogue.html` entry)
+- [ ] Keep `main.js` logic as `galaxy`/`sector`/`system` drill-down
+- [ ] Create `rogue-main.js` that re-uses same engine but swaps planet renderer
 
-## Verification
-1. Open `rogue.html` → random sector renders as ASCII grid with colored star glyphs.
-2. Click a star → info panel + toast with Yes/No.
-3. Yes → system view renders star + planets; lil-gui edits redraw.
-4. Click a planet → placeholder region panel (no crash).
-5. Open `index.html` → still works (unchanged, MajorSector + chance intact).
-6. Console: no errors; `window.App` defined; `ROT` global present.
+### 0.2 Stub out Rogue ASCII display
 
-## Out of scope
-- Three.js rendering on rogue page
-- Full galaxy save/load UI
-- planet/region/area/site generation (stubbed)
-- Deleting `sector_old.js` (kept for reference)
-- Full chanceJS removal from 3D page
+- [ ] Create `src/rogue/rogue-view.js` — renders a simple rectangular grid with `#` for walls, `.` for floor
+- [ ] Create `src/rogue/rogue-input.js` — keyboard movement (HJKUBYNB) or click-based navigation
+- [ ] Display placeholder: "Welcome to Planet XYZ (Sector 1,2)" — proves the pipe
+
+### 0.3 Verify click chain works
+
+- [ ] Galaxy click → sector → system → **click planet** → opens **Rogue placeholder**
+- [ ] Log seed chain to console to verify determinism
+- [ ] Mark Phase 1 complete when user can traverse 4 levels without console errors
+
+---
+
+## Phase 2 — Remove Old Planet Visuals/Generation
+
+### 2.1 Identify all WE planet code to remove
+
+Files under `src/engine/` to **disable** / **delete**:
+- `src/engine/system/we-planet.js` — WE planet terrain
+- `src/engine/render/planet-shaders.js` — WE shader materials
+- `src/engine/render/sun-shaders.js` — WE star shaders
+- `src/engine/constants/colormap.js` — biome colormap (WE)
+- `src/engine/constants/defaults.js` — WE defaults (will be re-evaluated)
+- `src/engine/constants/sphere-mesh.js` — WE fibonacci sphere (will be re-evaluated)
+
+Keep for now, but **tag with `DEPRECATED` comments**:
+- Any file still exported from `planet-render.js` that needs to stay as adapters
+
+### 2.2 Create planet-type abstraction
+
+Create `src/engine/system/planet-type.js`:
+
+```js
+// exports:
+//   getPlanetType(hi, classification) → 'habitable' | 'rocky' | 'icy' | 'hostile' | 'barren' | 'airless'
+//   derivePlanetSeed(parentSeed, planetIndex) → number
+//   createPlanetInstance(seed, type, opts) → PlanetInstance
+```
+
+### 2.3 Implement non-habitable types in-house
+
+| Type | Implementation notes | Dependencies |
+|------|---------------------|--------------|
+| Rocky | Terrestrial world with solid crust, possible mountains/craters | simplex noise + height map |
+| Icy | Frozen world, low temperature bias, ice layers | temperature offset < 0, moisture map inverted |
+| Hostile | Toxic atmosphere, extreme temps, sparse life | high tempVariance, toxic overlays |
+| Barren | No water, minimal atmosphere, dust storms | waterLevel = 0 |
+| Airless Moon | Tidally locked to parent planet, cratered surface, no atmosphere | parent gravity, low seed |
+
+**Deliverable**: A module `src/engine/system/planet-gen.js` containing these generation stubs that can be
+replaced later when AFMGData grows.
+
+---
+
+## Phase 3 — Integrate AFMGData for Habitable Planets + Regions
+
+### 3.1 Add AFMGData repository as submodule or inline
+
+Option A: Git submodule `lib/AFMGData/`
+```bash
+git submodule add git@github.com:0xPaladin/AFMGData.git lib/AFMGData
+```
+
+Option B: Copy relevant files into `src/engine/peoples/AFMGData/`
+
+### 3.2 Identify AFMGData API
+
+Files to read:
+- `lib/AFMGData/planet.js` — habitable planet generation
+- `lib/AFMGData/region.js` — region/topography generation
+
+### 3.3 Create `AFMGAdapter` wrapper
+
+`src/engine/peoples/afmg-adapter.js`:
+
+```js
+import { generateHabitablePlanet } from '../../lib/AFMGData/planet.js';
+import { generateRegion } from '../../lib/AFMGData/region.js';
+
+export function getHabitablePlanet(seed, opts) {
+  return generateHabitablePlanet(seed, opts);
+}
+
+export function getRegion(planetSeed, regionCoords) {
+  return generateRegion(planetSeed, regionCoords);
+}
+```
+
+### 3.4 Wire into click handler
+
+Modify `main.js`:
+
+```js
+if (isHabitable) {
+  const planetData = AFMGAdapter.getHabitablePlanet(seed, opts);
+  // pass to Rogue display
+} else {
+  const planetData = InHousePlanetGen.generate(seed, type, opts);
+}
+```
+
+---
+
+## Phase 4 — Develop Rogue Display for Planet
+
+### 4.1 Render planet name + type in Rogue header
+
+### 4.2 Surface terrain features
+
+Using whatever AFMGData returns (height map?), render:
+
+```
+^^^^^^^^^^^    <-- mountain peaks
+.........../    <-- plains
+..##.......    <-- slight elevation
+...........
+....###....
+```
+
+Legend:
+- `^` = mountain
+- `.` = flat
+- `#` = hill / shallow elevation
+- `~` = water (if habitable and opts.waterLevel > 0.2)
+
+### 4.3 Add region click inside planet view
+
+- When player clicks a cell in the planet grid, generate the region at that location.
+- Region grid is smaller (e.g., 32x32 tiles within the 128x128 planet grid).
+
+---
+
+## Phase 5 — Population Simulation (Top-Down Seeding)
+
+> This is the **final prerequisite** before full region/building chain can be validated.
+> The Conway simulation runs once per galaxy, seeds population signatures that bias
+> habitable-planet generation and are used for region/building expansion later.
+
+### 5.1 Design Conway parameters
+
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| Grid | 16x16 cells per sector | Coarse, fast evolution |
+| Initial random fill | 0.4 (40%) | Stable-ish patterns |
+| Birth threshold (B3) | 3 neighbors | Standard Game of Life |
+| Survival threshold (S23) | 2-3 neighbors | Standard Game of Life |
+
+### 5.2 Create simulation runner
+
+File: `src/engine/population/galaxy-population.js`:
+
+```js
+export function runPopulationSim(galaxySeed, width, height) {
+  const grid = initGrid(galaxySeed, width, height);
+  const generations = evolve(grid, 64); // run 64 ticks
+  return generations[-1]; // final stable state
+}
+```
+
+### 5.3 Propagation chain
+
+For each sector cell `(x, y)`:
+```js
+const sectorSeed = deriveSeed(galaxySeed, `sector:${x},${y}`);
+const popValue = finalGrid[x][y]; // 0 or 1
+
+if (popValue) {
+  majorSector.population = {
+    density: popValue,
+    seed: sectorSeed
+  };
+}
+```
+
+### 5.4 Use population to bias planet generation
+
+In `getHabitablePlanet`:
+```js
+if (sector.population.density > 0.5) {
+  opts.lifeRating = 0.9;
+} else {
+  opts.lifeRating = 0.2;
+}
+```
+
+### 5.5 Deliverables
+
+- [ ] `src/engine/population/conway.js` — pure Conway implementation
+- [ ] `src/engine/population/seeding.js` — propagates pop to sectors/systems
+- [ ] Integration test: running simulation yields same population distribution from same seed
+- [ ] Debug view: render population density overlay on galaxy view (temporary)
+
+---
+
+## Timeline Estimate
+
+| Week | Target |
+|------|--------|
+| Week 0 | Phase 0.1–0.3 complete, Rogue placeholder works |
+| Week 1 | Phase 2 complete, WE planet code deprecated / removed |
+| Week 2 | Phase 3 complete, AFMG habitable planets integrated |
+| Week 3 | Phase 4 complete, Rogue planet view with terrain |
+| Week 4 | Phase 5 complete, Conway population simulation functional |
+
+---
+
+## Acceptance Criteria
+
+Before moving on to Phase 6 (buildings + regions):
+
+1. **Deterministic seed chain**: Starting from Galaxy seed `12345`, drilled-down planet has the same
+   generated region every reload.
+2. **Rogue viewport works**: User can move around planet via keyboard/click within 32x32 tile view.
+3. **AFMGData integration verified**: Habitable planet generation runs without errors and produces
+   height/feature data the Rogue display can render.
+4. **Population distribution visible**: Galaxy view can overlay (or console print) stable Conway
+   evolution from sector grid.
+
+---
+
+## Next Steps After Phase 5
+
+- Phase 6: Click to zoom → generate region at deeper grid, add building-level cells.
+- Phase 7: Population density becomes building count, populate using Conway seed at region level.
+- Phase 8: Polish, performance, optional richer tileset behind same data model.

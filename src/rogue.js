@@ -469,7 +469,6 @@ class RogueApp {
             }
         } else if (level === 'region') {
             this.infoFolder.add({ v: `${data.lon.toFixed(1)}°, ${data.lat.toFixed(1)}°` }, 'v').name('Coords').disable();
-            this.infoFolder.add({ v: data.template }, 'v').name('Template').disable();
             this.infoFolder.add({ v: data.sites.length }, 'v').name('Sites').disable();
             this.infoFolder.add({ v: data.features.length }, 'v').name('Features').disable();
         }

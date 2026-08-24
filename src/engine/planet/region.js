@@ -142,7 +142,6 @@ export async function generateRegion(surface, cellIndex, opts = {}) {
   const { generateCellRegion } = await import('./afmg-adapter.js');
   const afmgRegion = await generateCellRegion(regionSeed, {
     sizeKm: opts.sizeKm ?? sideKm,
-    cells: opts.cells ?? 2500,
     heightmap: heightmapFn
   });
 

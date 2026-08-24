@@ -137,12 +137,13 @@ function mapFeatures(pack) {
  */
 export async function generateCellRegion(seed, opts = {}) {
   const size = opts.sizeKm || 100;
+  const cells = opts.cells || (size * size) / 4; // adapt for 2km per cell
   const map = await withRestoredRandom(() => generateMap({
     mode: 'region',
     seed,
     width: size,
     height: size,
-    cells: opts.cells || 2500,
+    cells: cells > 25000 ? 25000 : cells,
     heightmap: opts.heightmap
   }));
 

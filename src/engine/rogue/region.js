@@ -77,9 +77,18 @@ export function RogueRegion(region, display) {
       if (!items.length) continue;
       const cell = items.reduce((a, b) => (b.elev > a.elev ? b : a));
       const def = region.palette[cell.biome];
-      display.draw(x, y, def ? def.glyph : '?', def ? def.fg : '#888888');
+      //display.draw(x, y, def ? def.glyph : '?', '#000', def ? def.fg : '#888888');
     }
   }
+
+  //change to display by cell
+  region.cells.forEach(cell => {
+    const { x, y, biome } = cell;
+    const tx = width * x / bounds.maxX;
+    const ty = height * y / bounds.maxY;
+    const def = region.palette[cell.biome];
+    display.draw(tx, ty, def ? def.glyph : '?', '#000', def ? def.fg : '#888888');
+  });
 
   // features (rivers, peaks, coastlines, ...) — drawn over terrain
   (region.features || []).forEach(f => {
