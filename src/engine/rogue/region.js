@@ -3,7 +3,7 @@ import { project } from './view.js';
 // The `settlement`/`marker` entries are the pickSites() fallback vocabulary
 // (region.js, used only when no population/habitation data is wired in); every
 // other key is a real habitat type from population/habitat.js's catalog.
-const SITE_GLYPHS = {
+export const SITE_GLYPHS = {
   settlement: { glyph: '⌂', fg: '#ffe08a' },
   marker: { glyph: '✦', fg: '#ffffff' },
   ruin: { glyph: '▦', fg: '#aa8866' },

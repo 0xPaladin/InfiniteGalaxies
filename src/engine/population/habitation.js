@@ -64,6 +64,28 @@ export function generatePlanetHabitation(seed, ctx, surface) {
   return { seed: habSeed, habitats: [...planetHabitats, ...orbitHabitats] };
 }
 
+/**
+ * Whether a planet would get ANY habitat (planet-level or orbital), without
+ * paying for its full surface generation first. Keys off the exact same
+ * (habSeed, ctx, surfaceType) inputs generatePlanetHabitation() itself uses —
+ * the only thing that function needs a real `surface` for is `pickSiteCell`'s
+ * site position, which this presence check doesn't need — so the two always
+ * agree on whether a given planet gets habitats. Used to cheaply scan every
+ * planet in a system/sector for "does this have anything" navigation without
+ * triggering AFMG/in-house terrain generation on planets nobody's visited yet.
+ *
+ * @param {string} seed - the planet's own seed (planet._seed)
+ * @param {Object|null} ctx
+ * @param {string} surfaceType - classify(planet) from planet/types.js
+ */
+export function planetHasHabitats(seed, ctx, surfaceType) {
+  const habSeed = childSeed(seed, 'habitation');
+  if (!ctx || ctx.cultureId == null) return false;
+  if (rollHabitats(habSeed, 'planet', ctx, surfaceType).length) return true;
+  if (rollHabitats(habSeed, 'orbit', ctx, surfaceType).length) return true;
+  return false;
+}
+
 /** Stellar megastructures (§13.0b) — attach to the star, shared by the whole system. */
 export function generateSystemHabitation(seed, ctx) {
   const habSeed = childSeed(seed, 'habitation');

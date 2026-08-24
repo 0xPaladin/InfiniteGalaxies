@@ -1,5 +1,6 @@
 import * as d3 from 'd3';
 import { geoVoronoi } from 'd3-geo-voronoi';
+import { SITE_GLYPHS } from './region.js';
 
 // ── color helpers (renderer-local derived data — §0: computed here, not stored
 // on the generated object) ──────────────────────────────────────────────────
@@ -60,9 +61,11 @@ function buildProjection(rotateLon, size) {
 
 // One hemisphere: a filled Voronoi mesh over the planet's surface cells,
 // projected orthographically and clipped at the horizon by d3.geoPath — cell
-// color only, no glyphs (VISION.md's roguelike feel comes from the surrounding
-// chrome/palette, not from drawing characters onto the globe here).
-function renderHemisphere(svg, cx, cy, size, surface, voronoi, rotateLon, overlay, ranges, onCellClick) {
+// color only for terrain (VISION.md's roguelike feel comes from the
+// surrounding chrome/palette, not from drawing characters onto the globe
+// here) but real habitats DO get a marker glyph (see below) so a settled
+// world reads as settled at a glance, before drilling into any one region.
+function renderHemisphere(svg, cx, cy, size, surface, voronoi, rotateLon, overlay, ranges, onCellClick, habitats) {
   const projection = buildProjection(rotateLon, size);
   const path = d3.geoPath(projection);
   const g = svg.append('g').attr('transform', `translate(${cx},${cy})`);
@@ -86,6 +89,30 @@ function renderHemisphere(svg, cx, cy, size, surface, voronoi, rotateLon, overla
     .attr('d', path)
     .attr('fill', d => cellColor(surface.cells[d.i], surface, overlay, ranges))
     .on('click', (event, d) => onCellClick(d.i));
+
+  // Habitat markers: orbital habitats (stations, shipyards, ...) have no
+  // surface position (`pos: null`) and aren't drawn here. A ground habitat is
+  // only ever facing ONE of the two hemispheres at a time — same visibility
+  // test d3.geoOrthographic's own clipAngle(90) path clipping uses (within
+  // 90 degrees of this hemisphere's sub-observer point).
+  const onSurface = (habitats || []).filter(h => h.pos);
+  const visible = onSurface.filter(h => d3.geoDistance([h.pos.x, h.pos.y], [rotateLon, 0]) < Math.PI / 2);
+  if (visible.length) {
+    g.selectAll('text.habitat-marker')
+      .data(visible)
+      .join('text')
+      .attr('class', 'habitat-marker')
+      .attr('x', h => projection([h.pos.x, h.pos.y])[0])
+      .attr('y', h => projection([h.pos.x, h.pos.y])[1])
+      .attr('text-anchor', 'middle')
+      .attr('dominant-baseline', 'central')
+      .attr('font-size', 13)
+      .attr('paint-order', 'stroke')
+      .attr('stroke', '#000000')
+      .attr('stroke-width', 2)
+      .attr('fill', h => (SITE_GLYPHS[h.type] || SITE_GLYPHS.marker).fg)
+      .text(h => (SITE_GLYPHS[h.type] || SITE_GLYPHS.marker).glyph);
+  }
 
   return g;
 }
@@ -126,11 +153,12 @@ function renderSurface(surface, container, opts) {
   }));
   const voronoi = geoVoronoi(points);
   const onCellClick = opts.onCellClick || (() => {});
+  const habitats = opts.habitats || [];
 
-  renderHemisphere(svg, 0, 0, size, surface, voronoi, 0, overlay, ranges, onCellClick);
+  renderHemisphere(svg, 0, 0, size, surface, voronoi, 0, overlay, ranges, onCellClick, habitats);
   svg.append('text').attr('class', 'hemisphere-label').attr('x', size / 2).attr('y', size + 16).text('0° meridian');
 
-  renderHemisphere(svg, size + gap, 0, size, surface, voronoi, 180, overlay, ranges, onCellClick);
+  renderHemisphere(svg, size + gap, 0, size, surface, voronoi, 180, overlay, ranges, onCellClick, habitats);
   svg.append('text').attr('class', 'hemisphere-label').attr('x', size + gap + size / 2).attr('y', size + 16).text('180° meridian');
 
   return {};
@@ -185,7 +213,10 @@ function renderGasGiant(planet, container, opts) {
  * @param {Object} planet - generatePlanet()/generateMoon() output
  * @param {import('../planet/types.js').PlanetSurface} surface - generateSurface(planet) output
  * @param {HTMLElement} container
- * @param {{overlay?: string, onCellClick?: (cellIndex:number)=>void, onMoonClick?: (moon:Object)=>void}} [opts]
+ * @param {{overlay?: string, onCellClick?: (cellIndex:number)=>void, onMoonClick?: (moon:Object)=>void, habitats?: Array}} [opts] -
+ *   `habitats` (population/habitation.js's generatePlanetHabitation output) get
+ *   a marker glyph on whichever hemisphere they're actually facing; entries
+ *   with `pos: null` (orbital habitats — no surface position) are skipped.
  */
 export function RoguePlanet(planet, surface, container, opts = {}) {
   container.innerHTML = '';

@@ -11,11 +11,11 @@ import { GUI } from 'https://cdn.jsdelivr.net/npm/lil-gui@0.21/+esm';
 
 import { generateGalaxy } from './engine/galaxy/galaxy_gen.js';
 import { generateSector } from './engine/galaxy/sector.js';
-import { generateSurface } from './engine/planet/types.js';
+import { generateSurface, classify } from './engine/planet/types.js';
 import { generateRegion } from './engine/planet/region.js';
 import { initPopulation, advancePopulation, populationView, buildSnapshotIndex } from './engine/population/sim.js';
 import { cultureContextFor } from './engine/population/context.js';
-import { generatePlanetHabitation, generateSystemHabitation } from './engine/population/habitation.js';
+import { generatePlanetHabitation, generateSystemHabitation, planetHasHabitats } from './engine/population/habitation.js';
 import { generateNativeCulture } from './engine/population/native.js';
 
 import { RogueGalaxy } from './engine/rogue/galaxy.js';
@@ -88,6 +88,14 @@ class RogueApp {
         // level below it (system/planet/region habitation calls all share the
         // one sector's culture data; the sim has no finer resolution than that).
         this.currentCtx = null;
+
+        // Cursor into the current sector/system's "has content" list (see
+        // _systemHasContent/_planetHasContent below) — which qualifying entry
+        // Next/Prev last jumped to, so repeated presses cycle forward/back
+        // instead of re-finding the first one every time. Reset whenever the
+        // parent level is (re)entered, since the qualifying list itself changes.
+        this._contentSystemCursor = -1;
+        this._contentPlanetCursor = -1;
     }
 
     get top() { return this.stack[this.stack.length - 1]; }
@@ -229,8 +237,40 @@ class RogueApp {
             ctx: this.currentCtx
         });
         this.stack.push({ level: 'sector', data });
+        this._contentSystemCursor = -1; // fresh sector -> fresh qualifying-system list
         this._render();
         this._persist();
+    }
+
+    // Cheap "does this system have anything" check for sector-view navigation
+    // (_nextContentSystem below) — a stellar megastructure attached to the
+    // system itself, OR any planet in it that would get a habitat. Reuses
+    // generateSystemHabitation (already surface-free) and planetHasHabitats
+    // (habitation.js's presence-only check) so this never triggers the
+    // expensive per-planet terrain generation just to answer "is there
+    // anything here" for systems nobody's actually visited yet.
+    _systemHasContent(system) {
+        if (!this.currentCtx || this.currentCtx.cultureId == null) return false;
+        if (generateSystemHabitation(system.seed, this.currentCtx).habitats.length) return true;
+        return system.planets.some(p => planetHasHabitats(p._seed, this.currentCtx, classify(p)));
+    }
+
+    // Jump the sector view directly into the next/previous system (by sector
+    // order, wrapping) that has a stellar megastructure or a habitat-bearing
+    // planet — same generate-then-render entry _enterSystem already does,
+    // just choosing WHICH system without the user having to hunt for it
+    // glyph-by-glyph across up to 150 systems.
+    _nextContentSystem(delta) {
+        if (!this.top || this.top.level !== 'sector') return;
+        const systems = this.top.data.systems;
+        const qualifying = systems.filter(s => this._systemHasContent(s));
+        if (!qualifying.length) { toast('No systems with habitats or megastructures in this sector'); return; }
+
+        let next = this._contentSystemCursor + delta;
+        if (next < 0) next = qualifying.length - 1;
+        if (next >= qualifying.length) next = 0;
+        this._contentSystemCursor = next;
+        this._enterSystem(qualifying[next]);
     }
 
     _enterSystem(system) {
@@ -239,8 +279,31 @@ class RogueApp {
         // for it (IMPLEMENTATION_PLAN.md's "generate only visited children").
         const habitation = generateSystemHabitation(system.seed, this.currentCtx);
         this.stack.push({ level: 'system', data: system, habitation });
+        this._contentPlanetCursor = -1; // fresh system -> fresh qualifying-planet list
         this._render();
         this._persist();
+    }
+
+    // Same idea as _systemHasContent, one level down: does this planet have
+    // any habitat at all, without generating its surface first.
+    _planetHasContent(planet) {
+        if (!this.currentCtx || this.currentCtx.cultureId == null) return false;
+        return planetHasHabitats(planet._seed, this.currentCtx, classify(planet));
+    }
+
+    // Jump the system view directly into the next/previous planet (by system
+    // order, wrapping) that would actually get a habitat.
+    _nextContentPlanet(delta) {
+        if (!this.top || this.top.level !== 'system') return;
+        const planets = this.top.data.planets;
+        const qualifying = planets.filter(p => this._planetHasContent(p));
+        if (!qualifying.length) { toast('No habitat-bearing planets in this system'); return; }
+
+        let next = this._contentPlanetCursor + delta;
+        if (next < 0) next = qualifying.length - 1;
+        if (next >= qualifying.length) next = 0;
+        this._contentPlanetCursor = next;
+        this._enterPlanet(qualifying[next]).catch(err => { console.error(err); toast('Error: ' + err.message); });
     }
 
     // `planet` here is any generatePlanet()/generateMoon() output — moons are
@@ -393,6 +456,7 @@ class RogueApp {
         } else if (level === 'planet') {
             RoguePlanet(this.top.planet, data, this.planetHost, {
                 overlay: this.planetOverlay,
+                habitats: this.top.habitation ? this.top.habitation.habitats : [],
                 onCellClick: (cellIndex) => {
                     toast(`Descending to region ${cellIndex}...`);
                     this._enterRegion(cellIndex).catch(err => { console.error(err); toast('Error: ' + err.message); });
@@ -449,12 +513,26 @@ class RogueApp {
                 this.infoFolder.add({ v: this.currentCtx.tier }, 'v').name('Tier').disable();
             }
             this.infoFolder.add({ v: (data.habitation && data.habitation.habitats.length) || 0 }, 'v').name('Sector habitats').disable();
+
+            const contentSystems = data.systems.filter(s => this._systemHasContent(s));
+            this.infoFolder.add({ v: contentSystems.length }, 'v').name('Systems w/ content').disable();
+            if (contentSystems.length) {
+                this.infoFolder.add({ fn: () => this._nextContentSystem(-1) }, 'fn').name('◂ Prev content system');
+                this.infoFolder.add({ fn: () => this._nextContentSystem(1) }, 'fn').name('Next content system ▸');
+            }
         } else if (level === 'system') {
             this.infoFolder.add({ v: data.name || data.seed }, 'v').name('Name').disable();
             this.infoFolder.add({ v: data.star.primary.spectral }, 'v').name('Spectral').disable();
             this.infoFolder.add({ v: data.star.multiplicity }, 'v').name('Multiplicity').disable();
             this.infoFolder.add({ v: data.planets.length }, 'v').name('Planets').disable();
             this.infoFolder.add({ v: (this.top.habitation && this.top.habitation.habitats.length) || 0 }, 'v').name('Stellar megastructures').disable();
+
+            const contentPlanets = data.planets.filter(p => this._planetHasContent(p));
+            this.infoFolder.add({ v: contentPlanets.length }, 'v').name('Planets w/ habitats').disable();
+            if (contentPlanets.length) {
+                this.infoFolder.add({ fn: () => this._nextContentPlanet(-1) }, 'fn').name('◂ Prev habitat planet');
+                this.infoFolder.add({ fn: () => this._nextContentPlanet(1) }, 'fn').name('Next habitat planet ▸');
+            }
         } else if (level === 'planet') {
             this.infoFolder.add({ v: data.type }, 'v').name('Type').disable();
             this.infoFolder.add({ v: data.HI }, 'v').name('HI').disable();
