@@ -3,6 +3,7 @@ import { childSeed, coordSeed } from '../seed.js';
 import { makeNoise2D, fbm } from './noise.js';
 import { prepareCellTerrain } from './cell-terrain.js';
 import { PROFILES } from './profiles.js';
+import { biasHabitableRegion } from './habitable-biome.js';
 
 /** Nearest surface cell's INDEX to a clicked surface-space point (x,y) — the region for that click. */
 export function regionCellIndexFor(surface, x, y) {
@@ -142,7 +143,13 @@ export async function generateRegion(surface, cellIndex, opts = {}) {
   const { generateCellRegion } = await import('./afmg-adapter.js');
   const afmgRegion = await generateCellRegion(regionSeed, {
     sizeKm: opts.sizeKm ?? sideKm,
-    heightmap: heightmapFn
+    heightmap: heightmapFn,
+    // Nudges AFMG's own local climate sim toward the parent cell's real
+    // temperature (same units — both are the AFMG planet-scale sim's own
+    // °C output) instead of a generic default. See habitable-biome.js for
+    // the accompanying moisture/biome bias, which does the same job more
+    // decisively for the habitable branch below.
+    tempC: parentCell.temp
   });
 
   let cells = afmgRegion.cells;
@@ -161,6 +168,13 @@ export async function generateRegion(surface, cellIndex, opts = {}) {
       return { x: c.x, y: c.y, elev: c.elev, moisture, temp, biome: profile.biome(c.elev, moisture, temp) };
     });
     palette = surface.palette;
+  } else if (surface.type === 'habitable') {
+    // Habitable: AFMG's own biome classifier is otherwise blind to what the
+    // parent surface cell actually was — bias moisture toward it and
+    // reclassify, so a region generated from a forest tile predominantly
+    // comes out forest instead of whatever AFMG's generic regional climate
+    // model produced. See habitable-biome.js.
+    cells = biasHabitableRegion(afmgRegion.cells, parentCell);
   }
 
   return {

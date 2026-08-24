@@ -133,7 +133,10 @@ function mapFeatures(pack) {
  * by region.js from terrain + habitation data.
  *
  * @param {string} seed
- * @param {{sizeKm: number, cells?: number, heightmap: Function}} opts
+ * @param {{sizeKm: number, cells?: number, heightmap: Function, tempC?: number}} opts -
+ *   `tempC`, when given, centers AFMG's own region-mode tempRange config on that
+ *   single value (flat — a region is small enough that a north/south gradient
+ *   within it isn't meaningful) instead of the generic region-mode default.
  */
 export async function generateCellRegion(seed, opts = {}) {
   const size = opts.sizeKm || 100;
@@ -144,7 +147,8 @@ export async function generateCellRegion(seed, opts = {}) {
     width: size,
     height: size,
     cells: cells > 25000 ? 25000 : cells,
-    heightmap: opts.heightmap
+    heightmap: opts.heightmap,
+    tempRange: opts.tempC != null ? [opts.tempC, opts.tempC, opts.tempC] : undefined
   }));
 
   return {
