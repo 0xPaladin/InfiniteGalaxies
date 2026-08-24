@@ -63,6 +63,10 @@ export function RogueRegion(region, display) {
   const { width, height } = display._options;
   const { bounds } = region;
 
+  // `index` is only needed for click hit-testing of the features/sites added
+  // to it below — built once via the shared project() helper, unused for the
+  // terrain fill (see the direct binning pass just below, which needs to be
+  // fast at up to ~60k tiles and a string-keyed Map lookup per tile isn't).
   const index = project(region.cells, {
     getPos: c => ({ x: c.x, y: c.y }),
     srcBounds: bounds,
@@ -70,25 +74,57 @@ export function RogueRegion(region, display) {
     height
   });
 
-  // base layer: terrain, biome-colored
-  for (let x = 0; x < width; x++) {
-    for (let y = 0; y < height; y++) {
-      const items = index.at(x, y);
-      if (!items.length) continue;
-      const cell = items.reduce((a, b) => (b.elev > a.elev ? b : a));
-      const def = region.palette[cell.biome];
-      //display.draw(x, y, def ? def.glyph : '?', '#000', def ? def.fg : '#888888');
+  // base layer: terrain, biome-colored. The AFMG mesh is capped at 25000
+  // cells for generation speed (afmg-adapter.js) while a large region can ask
+  // for far more display tiles (2km/tile) — so plenty of tiles have no source
+  // cell landing on them at all. Rather than leave those black, bin every
+  // source cell directly into a flat per-tile array (O(cells), no Map), then
+  // run a multi-source BFS fill: seed every directly-binned tile, spread each
+  // one outward into its still-empty neighbors until the grid is covered.
+  // That approximates a real nearest-neighbor rasterization of the point
+  // cloud (the correct visual result regardless of source-cell sparsity) —
+  // O(tiles) with a small constant factor, no extra AFMG cells needed.
+  const spanX = (bounds.maxX - bounds.minX) || 1;
+  const spanY = (bounds.maxY - bounds.minY) || 1;
+  const destCell = new Array(width * height).fill(null);
+  const destElev = new Float32Array(width * height).fill(-Infinity);
+  const at = (x, y) => y * width + x;
+
+  const queue = [];
+  for (const cell of region.cells) {
+    const nx = (cell.x - bounds.minX) / spanX;
+    const ny = (cell.y - bounds.minY) / spanY;
+    const gx = Math.min(width - 1, Math.max(0, Math.floor(nx * width)));
+    const gy = Math.min(height - 1, Math.max(0, Math.floor(ny * height)));
+    const k = at(gx, gy);
+    if (cell.elev > destElev[k]) {
+      if (destElev[k] === -Infinity) queue.push(gx, gy); // seed the fill queue once per tile
+      destElev[k] = cell.elev;
+      destCell[k] = cell;
     }
   }
 
-  //change to display by cell
-  region.cells.forEach(cell => {
-    const { x, y, biome } = cell;
-    const tx = width * x / bounds.maxX;
-    const ty = height * y / bounds.maxY;
-    const def = region.palette[cell.biome];
-    display.draw(tx, ty, def ? def.glyph : '?', '#000', def ? def.fg : '#888888');
-  });
+  const NEIGHBORS = [[-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1]];
+  for (let qi = 0; qi < queue.length; qi += 2) {
+    const x = queue[qi], y = queue[qi + 1];
+    const cell = destCell[at(x, y)];
+    for (const [dx, dy] of NEIGHBORS) {
+      const nx = x + dx, ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+      if (destCell[at(nx, ny)]) continue;
+      destCell[at(nx, ny)] = cell;
+      queue.push(nx, ny);
+    }
+  }
+
+  for (let x = 0; x < width; x++) {
+    for (let y = 0; y < height; y++) {
+      const cell = destCell[at(x, y)];
+      if (!cell) continue; // only possible if region.cells is empty
+      const def = region.palette[cell.biome];
+      display.draw(x, y, def ? def.glyph : '?', '#000', def ? def.fg : '#888888');
+    }
+  }
 
   // features (rivers, peaks, coastlines, ...) — drawn over terrain
   (region.features || []).forEach(f => {
