@@ -35,6 +35,6 @@ function biome(elev) {
 export const PROFILE = { elevation, moisture, temperature, biome };
 
 export function generateRocky(seed, planet, opts = {}) {
-  const cells = buildSurfaceCells(seed, opts, { elevation, moisture, temperature, biome });
+  const cells = buildSurfaceCells(seed, { ...opts, radiusKm: planet.radius }, { elevation, moisture, temperature, biome });
   return makeSurface(seed, planet, { type: 'rocky', cells, palette: PALETTE });
 }

@@ -1,7 +1,7 @@
 import { PRNG } from '../random.js';
 import { childSeed, coordSeed } from '../seed.js';
 import { makeNoise2D, fbm } from './noise.js';
-import { findNeighbors, selectTemplate } from './region-templates.js';
+import { prepareCellTerrain } from './cell-terrain.js';
 import { PROFILES } from './profiles.js';
 
 /** Nearest surface cell's INDEX to a clicked surface-space point (x,y) — the region for that click. */
@@ -109,20 +109,22 @@ function resolveSites(regionSeed, parentCell, localCells, opts) {
 
 // A fresh small local noise field for moisture ONLY (0..1 raw, the exact input
 // shape every in-house PROFILE.moisture() expects) — elevation comes from
-// AFMG's templated heightmap instead (see generateRegion below), but AFMG's
-// own precipitation field is on a different, incompatible scale, so moisture
-// stays independently seeded local noise like the old refinement path did.
+// cell-terrain.js's neighbor-ramped heightmap instead (see generateRegion
+// below), but AFMG's own precipitation field is on a different, incompatible
+// scale, so moisture stays independently seeded local noise like the old
+// refinement path did.
 function localMoistureRaw(noise, x, y) {
   return fbm(noise, x / 20 + 50, y / 20 + 50, 3, 0.5, 1.3);
 }
 
 /**
  * Generate one region — a single planet surface cell's worth of local detail
- * (POPULATION_PLAN.md: "each planet cell is a region," square bounds, ~100km²
- * by default). Async — genuinely awaits AFMGData's region-mode terrain sim,
- * used for EVERY planet type now, not just habitable ones (see afmg-adapter.js's
- * generateTemplatedRegion for why). Pure function of `surface` + `cellIndex` +
- * `opts` — no live reference to the parent planet object (§0).
+ * (POPULATION_PLAN.md: "each planet cell is a region," equal-area square
+ * bounds sized from the cell's own measured neighbor spacing). Async —
+ * genuinely awaits AFMGData's region-mode terrain sim, used for EVERY planet
+ * type now, not just habitable ones (see afmg-adapter.js's generateCellRegion
+ * for why). Pure function of `surface` + `cellIndex` + `opts` — no live
+ * reference to the parent planet object (§0).
  *
  * @param {import('./types.js').PlanetSurface} surface
  * @param {number} cellIndex - index into surface.cells
@@ -135,15 +137,13 @@ export async function generateRegion(surface, cellIndex, opts = {}) {
   const parentCell = surface.cells[cellIndex];
   const regionSeed = coordSeed(surface.seed, 'region-cell', cellIndex);
 
-  const neighbors = findNeighbors(surface.cells, cellIndex, 8);
-  const templateRng = new PRNG(childSeed(regionSeed, 'template'));
-  const template = selectTemplate(parentCell, neighbors, parentCell.y, templateRng);
+  const { heightmapFn, sideKm } = prepareCellTerrain(surface, cellIndex, { fallbackSideKm: opts.sizeKm ?? 150 });
 
-  const { generateTemplatedRegion } = await import('./afmg-adapter.js');
-  const afmgRegion = await generateTemplatedRegion(regionSeed, {
-    sizeKm: opts.sizeKm ?? 100,
+  const { generateCellRegion } = await import('./afmg-adapter.js');
+  const afmgRegion = await generateCellRegion(regionSeed, {
+    sizeKm: opts.sizeKm ?? sideKm,
     cells: opts.cells ?? 2500,
-    template
+    heightmap: heightmapFn
   });
 
   let cells = afmgRegion.cells;
@@ -169,7 +169,7 @@ export async function generateRegion(surface, cellIndex, opts = {}) {
     cellIndex,
     lon: parentCell.x,
     lat: parentCell.y,
-    template,
+    sideKm,
     bounds: afmgRegion.bounds,
     cells,
     features: afmgRegion.features,

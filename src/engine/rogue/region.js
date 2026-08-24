@@ -51,10 +51,13 @@ function toGrid(x, y, bounds, width, height) {
  * @returns {{index: import('./view.js').TileIndex}}
  */
 export function RogueRegion(region, display) {
-  // A region is one square (AFMG local-km) surface cell now — the display grid
-  // matches that 1:1 (equal width/height cell counts; `forceSquareRatio: true`
-  // on the shared ROT.Display, set at app init, keeps it visually square too).
-  display.setOptions({ width: 90, height: 90, fontSize: 8 });
+  // Fixed 1km-per-tile: the ROT grid dimensions track the region's own
+  // equal-area-square side length (region.js's sideKm), not a constant tile
+  // count — a small region reads at native resolution instead of being
+  // stretched to fill a fixed grid. `forceSquareRatio: true` (set at app init)
+  // keeps it visually square regardless of size.
+  const tiles = Math.max(10, Math.round(region.sideKm || 100));
+  display.setOptions({ width: tiles, height: tiles, fontSize: Math.max(4, Math.min(8, Math.round(900 / tiles))) });
   const { width, height } = display._options;
   const { bounds } = region;
 

@@ -30,6 +30,6 @@ function biome(elev, moisture) {
 export const PROFILE = { elevation, moisture, temperature, biome };
 
 export function generateIcy(seed, planet, opts = {}) {
-  const cells = buildSurfaceCells(seed, opts, { elevation, moisture, temperature, biome });
+  const cells = buildSurfaceCells(seed, { ...opts, radiusKm: planet.radius }, { elevation, moisture, temperature, biome });
   return makeSurface(seed, planet, { type: 'icy', cells, palette: PALETTE });
 }

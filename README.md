@@ -61,13 +61,16 @@ Click a planet — or a moon orbiting a gas giant — to descend to its **surfac
 level, the planet view isn't ASCII: it's two side-by-side [d3](https://d3js.org/) orthographic
 hemispheres (near side / far side), each surface cell filled with its color only — no glyphs at this
 level. A dropdown still re-colors the same cells by elevation, temperature, or moisture instead of
-biome. Click a cell to drill into its **region** — every surface cell IS a region (a ~100km² square,
-its own local terrain generated via the vendored AFMG engine using a heightmap template chosen from
-that cell's own latitude and neighboring cells) — showing real **habitats** (settlements, outposts,
-cities, orbital stations, megastructures — or ruins if the region fell within a dead empire's
-territory) with actual populations, and **features** (mountain peaks, water, rivers, coastlines).
-Deep-space stations and capital ships also appear as separate glyphs in the sector view. Gas
-giants have no surface to drill into — click a moon (rendered as a dot) instead.
+biome. Click a cell to drill into its **region** — every surface cell IS a region (an equal-area
+square, its side length honest-measured from the cell's local density, so tiny moons get small
+regions and huge planets don't). Each region's terrain elevation ramps from that cell's own value to
+its 8 neighbors' at the edges/corners, with fine detail from 3D noise (seam-continuous across all
+boundaries). Generated via the vendored AFMG engine for geologically-plausible shapes. Shows real
+**habitats** (settlements, outposts, cities, orbital stations, megastructures — or ruins if the
+region fell within a dead empire's territory) with actual populations, and **features** (mountain
+peaks, water, rivers, coastlines). Deep-space stations and capital ships also appear as separate
+glyphs in the sector view. Gas giants have no surface to drill into — click a moon (rendered as a
+dot) instead.
 
 **Controls:**
 
@@ -78,6 +81,10 @@ giants have no surface to drill into — click a moon (rendered as a dot) instea
 | Step the culture simulation forward/back | **Step Forward ▸** / **◂ Step Back** in the GUI panel — no ceiling; stepping past what's been computed so far extends the simulation live instead of recomputing from scratch |
 | New galaxy | **New Galaxy** in the GUI panel (uses a fresh random seed) |
 | Save / Load / Delete Save | GUI panel buttons |
+
+Region displays use fixed 1km-per-tile resolution, so a small region (say, 40km side) renders at
+40×40 tiles while a large one (180km) fills 180×180 tiles, keeping fine detail legible without
+over-rendering tiny regions into a sparsely-populated grid.
 
 The right-hand **GUI panel** (via [lil-gui](https://lil-gui.georgealways.com/)) also shows live
 info for whatever you're currently looking at (star count, spectral class, planet HI rating, region
@@ -135,9 +142,12 @@ src/
     constants/            static data: astrophysics tables, colors, HI() habitability scale
     galaxy/                galaxy → sector → system → planet generators
     planet/                 planet-surface generators (5 in-house types + AFMG habitable adapter)
-                              - region.js: per-cell region generator (every surface cell is a region)
-                              - region-templates.js: neighbor lookup + AFMG heightmap template selection
-                              - profiles.js: exposes each in-house type's own biome/moisture/temp logic to region.js
+                              - cell-terrain.js: per-cell custom heightmap generator; compass-aligned
+                                ramp from cell's own elevation to neighbors' + 3D-noise detail
+                              - sphere-geo.js: bearing/distance math, equal-area square sizing from
+                                local density, dynamic cell count scaled to target region size
+                              - region.js: per-cell region generator (every surface cell is one region)
+                              - profiles.js: each in-house type's own biome/moisture/temp logic
     population/              the culture / Game-of-Life simulation + habitat placement
                               - sim.js: the main simulation with TL/bioform/trait evolution
                               - bioform.js: 6 bioforms, affinity table (which worlds each prefers)
@@ -204,15 +214,47 @@ object; none of them draw anything.
 |---|---|---|
 | `generateSurface` | `async (planet, opts)` | a `PlanetSurface`: `{seed, type, bounds, cells: [{x, y, elev, temp, moisture, biome}], palette}` — `type` is one of `rocky \| icy \| hostile \| barren \| airless-moon \| habitable \| gas giant` |
 | `classify` | `(planet)` | which of those types a planet resolves to, from its existing `HI`/temperature/atmosphere fields |
-| `generateRegion` | `async (surface, cellIndex, opts)` | one surface cell's local region: `{seed, cellIndex, lon, lat, template, bounds, cells, features, sites, palette}` — bounds are always a ~100km² square regardless of planet type. `template` is one of AFMG's 14 named heightmap shapes, chosen from the cell's own latitude + neighbors (`region-templates.js`); `opts.habitats`/`opts.ctx` drive site placement same as before |
+| `generateRegion` | `async (surface, cellIndex, opts)` | one surface cell's local region: `{seed, cellIndex, lon, lat, sideKm, bounds, cells, features, sites, palette}` — bounds are an equal-area square (side length measured from the cell's own k-nearest-neighbor density, so it's honest about real local spacing, not a flat ~100km claim). Terrain elevation ramps from this cell's own value to its 8 cardinal neighbors' at the region's edges/corners; fine detail layered via 3D-sphere-sampled noise (exactly seam-continuous across all region boundaries). `opts.habitats`/`opts.ctx` drive site placement same as before. |
 | `regionCellIndexFor` | `(surface, x, y)` | which surface cell (by index) a clicked point is nearest to |
 
 Every planet type's regions now route through the vendored AFMGData generator (for its
-geologically-plausible terrain shape); non-habitable types (rocky/icy/hostile/barren/airless-moon)
-then discard AFMG's own Earth-biome classification and re-derive biome/moisture through that
-type's own calibrated profile (`profiles.js`) instead — see `region.js`'s comments for why. Surface
-generation itself (not regions) is unchanged: habitable surfaces still route through AFMGData, the
-other five types are still generated in-house from seeded value noise.
+geologically-plausible terrain shape) via a custom heightmap function (`cell-terrain.js`),
+not a pre-baked template. Non-habitable types (rocky/icy/hostile/barren/airless-moon) then
+discard AFMG's own Earth-biome classification and re-derive biome/moisture through that
+type's own calibrated profile (`profiles.js`) instead — see `region.js`'s comments for why.
+Surface generation itself (not regions) is unchanged: habitable surfaces still route through
+AFMGData, the other five types are still generated in-house from seeded value noise.
+
+#### Region heightmap generation (`cell-terrain.js`)
+
+Each region's elevation is built in two layers: a coarse "ramp" from the surface cell's own
+elevation to its 8 cardinal neighbors' at the region's edges and corners (so two adjacent
+regions agree exactly at the shared anchor points), plus fine detail from 3D fractal noise
+sampled in the planet's real sphere-space (making this layer exactly seam-continuous
+everywhere, regardless of region boundaries). The noise amplitude auto-scales to the local
+relief, so flat cells stay flat and rugged neighborhoods stay rugged. Cardinal neighbors are
+found via compass-sector bucketing (one nearest per 45° wedge), making the ramp
+geographically plausible even on irregular point clouds (Fibonacci-sphere habitable surfaces
+and jittered lon/lat in-house grids alike).
+
+#### Equal-area square sizing
+
+A region's side length (km) is measured from the cell's k-nearest-neighbor local density —
+standard point-process technique, robust regardless of how the point cloud is laid out. This
+is what makes the sizing *honest*: a lon/lat jittered grid's equatorial cells are ~3× larger
+than its polar cells in real km, and the sizing reflects that. Every region's bounds are an
+actual equal-area square centered on the cell, not a flat ~100km claim that ignored latitude
+compression.
+
+#### Dynamic surface cell count
+
+Habitable worlds and in-house rocky/icy/hostile/barren/airless-moon planets now compute their
+surface cell count dynamically from their actual radius, targeting ~180km-per-region-side
+(guaranteeing <200km under real-world spacing, leaving margin). Small bodies (1000km radius)
+get ~300–400 cells; large ones (15000km) can reach ~87k cells. This trades surface-generation
+CPU time for honest region sizing across the full body-size range, since every region reads
+its own neighborhood, not a one-size-fits-all template — on a tiny moon, 87k would be absurd,
+but so would claiming a 100km-side region covers a 2000km-radius body.
 
 ### Population / culture simulation (`src/engine/population/`)
 

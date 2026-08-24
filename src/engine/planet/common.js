@@ -1,6 +1,7 @@
 import { PRNG } from '../random.js';
 import { childSeed } from '../seed.js';
 import { makeNoise2D, fbm } from './noise.js';
+import { dynamicGridDims, TARGET_REGION_SIDE_KM } from './sphere-geo.js';
 
 // Shared cell-field builder for all in-house (non-habitable) surface generators
 // (rocky/icy/hostile/barren/airless-moon). A `profile` supplies the type-specific
@@ -9,11 +10,18 @@ import { makeNoise2D, fbm } from './noise.js';
 // output is a point cloud on lon/lat degrees, not a dense w×h array, so it shares
 // one coordinate convention with the AFMG-sourced habitable surfaces.
 //
+// cols/rows default dynamically from `radiusKm` so every planet's per-cell
+// regions land under region.js's ~200km-a-side target regardless of body
+// size — a fixed 36x18 grid put ~890km regions on an Earth-radius rocky world
+// (region.js's equal-area-square sizing is honest about actual cell spacing,
+// so that was never really "100km²" like the old flat default claimed).
+//
 // @param {string} seed
-// @param {{cols?:number, rows?:number}} opts
+// @param {{cols?:number, rows?:number, radiusKm?:number}} opts
 // @param {{elevation, moisture, temperature, biome}} profile
 export function buildSurfaceCells(seed, opts, profile) {
-  const { cols = 36, rows = 18 } = opts;
+  const dynamicDims = dynamicGridDims(opts.radiusKm || 6371, TARGET_REGION_SIDE_KM);
+  const { cols = dynamicDims.cols, rows = dynamicDims.rows } = opts;
   const rng = new PRNG(childSeed(seed, 'surface-jitter'));
   const elevNoise = makeNoise2D(childSeed(seed, 'elev'));
   const moistNoise = makeNoise2D(childSeed(seed, 'moisture'));

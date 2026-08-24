@@ -39,3 +39,51 @@ export function fbm(noise2D, x, y, octaves = 4, persistence = 0.5, scale = 1) {
   }
   return sum / norm;
 }
+
+// Seeded 3D value noise — same trilinear-over-hashed-lattice approach as
+// makeNoise2D, extended a dimension. Used to sample terrain detail directly in
+// a planet's 3D unit-sphere space (cell-terrain.js): two adjacent regions
+// querying the SAME physical (lon,lat) point always get the identical value,
+// so this layer is exactly seam-continuous regardless of region boundaries —
+// unlike the coarse elevation ramp, which only matches at shared control points.
+export function makeNoise3D(seed) {
+  const cache = new Map();
+
+  function hash(x, y, z) {
+    const key = x + ',' + y + ',' + z;
+    let v = cache.get(key);
+    if (v === undefined) {
+      v = new PRNG(seed + ':' + key).rand();
+      cache.set(key, v);
+    }
+    return v;
+  }
+
+  function smooth(t) { return t * t * (3 - 2 * t); }
+  function lerp(a, b, t) { return a + (b - a) * t; }
+
+  return function noise3D(x, y, z) {
+    const x0 = Math.floor(x), y0 = Math.floor(y), z0 = Math.floor(z);
+    const sx = smooth(x - x0), sy = smooth(y - y0), sz = smooth(z - z0);
+    const n000 = hash(x0, y0, z0), n100 = hash(x0 + 1, y0, z0);
+    const n010 = hash(x0, y0 + 1, z0), n110 = hash(x0 + 1, y0 + 1, z0);
+    const n001 = hash(x0, y0, z0 + 1), n101 = hash(x0 + 1, y0, z0 + 1);
+    const n011 = hash(x0, y0 + 1, z0 + 1), n111 = hash(x0 + 1, y0 + 1, z0 + 1);
+    const nx00 = lerp(n000, n100, sx), nx10 = lerp(n010, n110, sx);
+    const nx01 = lerp(n001, n101, sx), nx11 = lerp(n011, n111, sx);
+    const nxy0 = lerp(nx00, nx10, sy), nxy1 = lerp(nx01, nx11, sy);
+    return lerp(nxy0, nxy1, sz);
+  };
+}
+
+/** Fractal sum of several octaves of `noise3D`. Returns roughly 0..1. */
+export function fbm3D(noise3D, x, y, z, octaves = 4, persistence = 0.5, scale = 1) {
+  let amp = 1, freq = scale, sum = 0, norm = 0;
+  for (let i = 0; i < octaves; i++) {
+    sum += amp * noise3D(x * freq, y * freq, z * freq);
+    norm += amp;
+    amp *= persistence;
+    freq *= 2;
+  }
+  return sum / norm;
+}

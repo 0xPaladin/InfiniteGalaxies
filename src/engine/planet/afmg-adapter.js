@@ -1,4 +1,5 @@
 import { generateMap } from '../../../lib/afmg/main.js';
+import { dynamicCellCount, TARGET_REGION_SIDE_KM } from './sphere-geo.js';
 
 // AFMGData reseeds the GLOBAL Math.random for the duration of generation
 // (Math.random = Alea(seed) — see docs/afmg-integration.md). Restore it afterward
@@ -60,11 +61,18 @@ function mapPalette(biomes) {
  * synchronous in-house generators (src/engine/planet/{rocky,icy,...}.js).
  */
 export async function generateHabitableSurface(seed, planet, opts = {}) {
+  const radiusKm = planet.radius || 6371; // planet.radius is already km (astrophysics.js)
+
+  // Cell count sized so each surface cell's equivalent region comes out under
+  // ~200km a side (region.js's per-cell-region model) — bigger planets get more
+  // cells, not a fixed count regardless of size.
+  const cells = opts.cells || dynamicCellCount(radiusKm, TARGET_REGION_SIDE_KM);
+
   const map = await withRestoredRandom(() => generateMap({
     mode: 'planet',
     seed,
-    planetRadius: planet.radius ? planet.radius / 1000 : 6371, // our radius is in km already; AFMG wants km too
-    cells: opts.cells || 8000
+    planetRadius: radiusKm,
+    cells
   }));
 
   return {
@@ -105,14 +113,14 @@ function mapFeatures(pack) {
 }
 
 /**
- * A local ~square region via the vendored AFMGData generator (mode: 'region') —
- * AFMGData's own terrain/hydrology sim for one planet surface cell's worth of
- * local detail (POPULATION_PLAN.md's per-cell-region design: one surface cell
- * = one region, sized ~100km² by default, "square bounds"). Used for EVERY
- * planet type, not just habitable ones — `opts.template` is chosen by
- * region-templates.js from the cell's own latitude/neighbor context, not left
- * to AFMG's internal random pick, so the terrain SHAPE (mountains vs. plains vs.
- * archipelago, etc.) actually reflects where on the planet this region sits.
+ * A local equal-area-square region via the vendored AFMGData generator
+ * (mode: 'region') — AFMGData's own hydrology/climate/biome pipeline for one
+ * planet surface cell's worth of local detail (POPULATION_PLAN.md's
+ * per-cell-region design). Used for EVERY planet type, not just habitable
+ * ones. `opts.heightmap`, from cell-terrain.js's prepareCellTerrain(), ramps
+ * from this cell's OWN elevation to its 8 neighbors' at the region's edges —
+ * so terrain shape actually reflects where on the planet this region sits,
+ * instead of AFMG's internal random template pick.
  *
  * For non-habitable planet types, region.js discards this map's own biome
  * classification (`cells[].biome` below) and re-derives it from that planet
@@ -125,9 +133,9 @@ function mapFeatures(pack) {
  * by region.js from terrain + habitation data.
  *
  * @param {string} seed
- * @param {{sizeKm?: number, cells?: number, template?: string}} [opts]
+ * @param {{sizeKm: number, cells?: number, heightmap: Function}} opts
  */
-export async function generateTemplatedRegion(seed, opts = {}) {
+export async function generateCellRegion(seed, opts = {}) {
   const size = opts.sizeKm || 100;
   const map = await withRestoredRandom(() => generateMap({
     mode: 'region',
@@ -135,7 +143,7 @@ export async function generateTemplatedRegion(seed, opts = {}) {
     width: size,
     height: size,
     cells: opts.cells || 2500,
-    template: opts.template
+    heightmap: opts.heightmap
   }));
 
   return {
