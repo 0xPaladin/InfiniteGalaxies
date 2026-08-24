@@ -59,18 +59,29 @@ scattered).
 
 Click a planet — or a moon orbiting a gas giant — to descend to its **surface**. Unlike every other
 level, the planet view isn't ASCII: it's two side-by-side [d3](https://d3js.org/) orthographic
-hemispheres (near side / far side), each surface cell filled with its color only — no glyphs at this
-level. A dropdown still re-colors the same cells by elevation, temperature, or moisture instead of
-biome. Click a cell to drill into its **region** — every surface cell IS a region (an equal-area
-square, its side length honest-measured from the cell's local density, so tiny moons get small
-regions and huge planets don't). Each region's terrain elevation ramps from that cell's own value to
-its 8 neighbors' at the edges/corners, with fine detail from 3D noise (seam-continuous across all
-boundaries). Generated via the vendored AFMG engine for geologically-plausible shapes. Shows real
-**habitats** (settlements, outposts, cities, orbital stations, megastructures — or ruins if the
-region fell within a dead empire's territory) with actual populations, and **features** (mountain
-peaks, water, rivers, coastlines). Deep-space stations and capital ships also appear as separate
-glyphs in the sector view. Gas giants have no surface to drill into — click a moon (rendered as a
-dot) instead.
+hemispheres (near side / far side), each surface cell filled with its color only. A dropdown still
+re-colors the same cells by elevation, temperature, or moisture instead of biome. Any planet-level
+habitat gets a marker glyph at its actual surface position too (orbital-only habitats — stations,
+shipyards — have no surface position and don't get one), drawn on whichever hemisphere it's actually
+facing, so a settled world reads as settled before you drill into any one region. Click a cell to
+drill into its **region** — every surface cell IS a region (an equal-area square, its side length
+honest-measured from the cell's local density, so tiny moons get small regions and huge planets
+don't). Each region's terrain elevation ramps from that cell's own value to its 8 neighbors' at the
+edges/corners, with fine detail from 3D noise (seam-continuous across all boundaries). Generated via
+the vendored AFMG engine for geologically-plausible shapes. Shows real **habitats** (settlements,
+outposts, cities, orbital stations, megastructures — or ruins if the region fell within a dead
+empire's territory) with actual populations, and **features** (mountain peaks, water, rivers,
+coastlines). Deep-space stations and capital ships also appear as separate glyphs in the sector
+view. Gas giants have no surface to drill into — click a moon (rendered as a dot) instead.
+
+**Finding content quickly:** hunting for the one system or planet with something on it, glyph by
+glyph, doesn't scale once a sector holds 100+ systems. The sector view's GUI panel shows a "Systems
+w/ content" count with **◂ Prev / Next content system ▸** buttons that jump straight into the next
+qualifying system (by sector order, wrapping) — "qualifying" meaning it has a stellar megastructure
+or at least one planet that would get a habitat. The system view has the equivalent one level down:
+**◂ Prev / Next habitat planet ▸**, jumping straight into the next planet that actually has a
+habitat. Both checks are cheap (no AFMG/in-house terrain generation triggered just to answer "is
+there anything here"), so they work instantly even on systems/planets nobody's visited yet.
 
 **Controls:**
 
@@ -78,6 +89,7 @@ dot) instead.
 |---|---|
 | Descend | Click a sector / star / planet surface cell / region-terrain tile |
 | Go back up one level | `Escape`, or the **Back** button in the GUI panel |
+| Jump to the next/prev system or planet with content | **◂ Prev / Next content system ▸** (sector view) / **◂ Prev / Next habitat planet ▸** (system view) in the GUI panel |
 | Step the culture simulation forward/back | **Step Forward ▸** / **◂ Step Back** in the GUI panel — no ceiling; stepping past what's been computed so far extends the simulation live instead of recomputing from scratch |
 | New galaxy | **New Galaxy** in the GUI panel (uses a fresh random seed) |
 | Save / Load / Delete Save | GUI panel buttons |
@@ -245,6 +257,21 @@ from `Rivers.generate()`, matching the "error at rivers" symptom. Fixed: an empt
 now correctly means "no land path to an outlet", so the lake is treated as closed instead of
 crashing the whole region generation.
 
+**Fully-open-ocean regions no longer crash either:** a second, unrelated bug hit when the
+*entire* region was deep water with no coastline anywhere in it (e.g. clicking an open-ocean
+surface cell) — AFMG's packing step deliberately drops "deep ocean" points as a performance
+optimization for its usual continent-scale maps, which left zero cells to pack and crashed a
+few steps later for the same underlying reason (`pack.features` never got set). Fixed by
+falling back to packing the raw grid unfiltered whenever the coastal-proximity filter would
+otherwise leave nothing at all — the region now correctly renders as solid water.
+
+**Surface cells were silently missing temp/moisture:** `PlanetSurface.cells[].temp` and
+`.moisture` were reading a field (`pack.cells.temp`/`.prec`) that doesn't exist on AFMG's
+packed cell set — that data lives on the finer simulation grid instead, addressed indirectly
+through a grid-reference index. The bug was silent (a `?:` guard just returned `null`), so
+every surface cell's temp/moisture came back empty, which is also why the biome-bias fix above
+had nothing real to bias with until this was found and fixed.
+
 #### Region heightmap generation (`cell-terrain.js`)
 
 Each region's elevation is built in two layers: a coarse "ramp" from the surface cell's own
@@ -287,6 +314,7 @@ but so would claiming a 100km-side region covers a 2000km-radius body.
 | `populationOf` | `(node, popIndex)` | *(in `galaxy/galaxy_gen.js`)* — the one place anything reads a sector's development score from |
 | `cultureContextFor` | `(popIndex, cultures, gx, gy)` | a `CultureContext` object: the culture data + development state for a given sector |
 | `generatePlanetHabitation` | `(seed, ctx, surface)` | `{seed, habitats: [...]}` — all settlements/outposts/cities/stations on a planet, placed by culture TL and bioform |
+| `planetHasHabitats` | `(seed, ctx, surfaceType)` | `boolean` — whether a planet would get any habitat, without generating its full surface first (same RNG-deterministic result `generatePlanetHabitation` would produce, just skipping the surface-dependent site-position lookup); powers the sector/system "jump to next content" navigation |
 | `generateSystemHabitation` | `(seed, ctx)` | stellar megastructures (collectors, ringworld segments) attached to a system's star |
 | `generateSectorHabitation` | `(seed, ctx, bounds)` | sector-level habitats (deep space stations, capital ships, derelicts, pirate havens) |
 | `generateNativeCulture` | `(seed, ctx, surface)` | a pre-spacefaring (TL 0–3) native culture on a planet, or null if none arose; entirely outside the main sim |
