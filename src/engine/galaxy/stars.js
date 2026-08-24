@@ -122,6 +122,7 @@ export function generateStar(rng, options = {}) {
   const primaryMass = spectralToMass(rng, primaryType);
   const luminosity = starTypeData[primaryType].luminosity;
   const primary = {
+    kind: 'star',
     role: 'primary',
     spectral: primaryType,
     luminosity,
@@ -151,6 +152,7 @@ export function generateStar(rng, options = {}) {
     const sepAU = periodToSeparation(period, totalMass);
 
     companions.push({
+      kind: 'star',
       role: i === 1 ? 'secondary' : `companion${i}`,
       spectral: massToSpectral(compMass),
       mass: +compMass.toFixed(3),

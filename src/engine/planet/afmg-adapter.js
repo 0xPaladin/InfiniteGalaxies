@@ -1,0 +1,133 @@
+import { generateMap } from '../../../lib/afmg/main.js';
+
+// AFMGData reseeds the GLOBAL Math.random for the duration of generation
+// (Math.random = Alea(seed) — see docs/afmg-integration.md). Restore it afterward
+// so that mutation doesn't leak into anything else running in the page.
+async function withRestoredRandom(fn) {
+  const saved = Math.random;
+  try {
+    return await fn();
+  } finally {
+    Math.random = saved;
+  }
+}
+
+function biomeGlyph(name) {
+  if (/marine/i.test(name)) return '~';
+  if (/desert/i.test(name)) return '.';
+  if (/rainforest|forest/i.test(name)) return '♠';
+  if (/glacier/i.test(name)) return '*';
+  if (/tundra/i.test(name)) return '"';
+  if (/wetland/i.test(name)) return '≈';
+  if (/savanna|grassland/i.test(name)) return ',';
+  if (/taiga/i.test(name)) return '^';
+  return '.';
+}
+
+// AFMGData's pack.cells is parallel typed arrays over an irregular Voronoi point
+// cloud, not a dense grid — see docs/afmg-integration.md. Map it into our shared
+// PlanetSurface.cells shape (IMPLEMENTATION_PLAN.md §4.2) without rasterizing.
+function mapPackCells(pack) {
+  const { cells, biomes } = pack;
+  const n = cells.i.length;
+  const out = new Array(n);
+  for (let idx = 0; idx < n; idx++) {
+    const [x, y] = cells.p[idx];
+    const biomeDef = biomes[cells.biome[idx]] || { name: 'unknown' };
+    out[idx] = {
+      x, y,
+      elev: cells.h[idx],
+      temp: cells.temp ? cells.temp[idx] : null,
+      moisture: cells.prec ? cells.prec[idx] : null,
+      biome: biomeDef.name
+    };
+  }
+  return out;
+}
+
+function mapPalette(biomes) {
+  const palette = {};
+  biomes.forEach(b => {
+    palette[b.name] = { glyph: biomeGlyph(b.name), fg: b.color, bg: '#000000' };
+  });
+  return palette;
+}
+
+/**
+ * Habitable-world surface via the vendored AFMGData generator (mode: 'planet').
+ * Async because generateMap() genuinely awaits multi-stage work — see
+ * IMPLEMENTATION_PLAN.md §4.2. Returns the same PlanetSurface shape as the
+ * synchronous in-house generators (src/engine/planet/{rocky,icy,...}.js).
+ */
+export async function generateHabitableSurface(seed, planet, opts = {}) {
+  const map = await withRestoredRandom(() => generateMap({
+    mode: 'planet',
+    seed,
+    planetRadius: planet.radius ? planet.radius / 1000 : 6371, // our radius is in km already; AFMG wants km too
+    cells: opts.cells || 8000
+  }));
+
+  return {
+    seed,
+    type: 'habitable',
+    HI: planet.HI,
+    radius: planet.radius,
+    gravity: planet.g,
+    hydrographics: planet.hydrographics,
+    atmosphere: planet.atmosphere,
+    meanTempC: planet.tempC,
+    bounds: { minX: -180, maxX: 180, minY: -90, maxY: 90 },
+    cells: mapPackCells(map.pack),
+    regions: [],
+    palette: mapPalette(map.pack.biomes)
+  };
+}
+
+const LAND_FEATURE_TYPES = new Set(['island', 'isle', 'continent', 'lake', 'lake_island']);
+
+// pack.features/pack.rivers are cell-id-referencing, not point data — resolve a
+// representative x,y from the cell graph so they fit the shared {kind,x,y,...}
+// feature shape (IMPLEMENTATION_PLAN.md §6.1).
+function mapFeatures(pack) {
+  const out = [];
+  (pack.features || []).forEach(f => {
+    if (!LAND_FEATURE_TYPES.has(f.type)) return; // skip ocean/sea/gulf — already implied by Marine biome
+    const p = pack.cells.p[f.firstCell];
+    if (!p) return;
+    out.push({ kind: f.type, x: p[0], y: p[1], area: f.area });
+  });
+  (pack.rivers || []).forEach(r => {
+    const p = pack.cells.p[r.mouth];
+    if (!p) return;
+    out.push({ kind: 'river', x: p[0], y: p[1], name: r.name, length: r.length });
+  });
+  return out;
+}
+
+/**
+ * Habitable-world region via the vendored AFMGData generator (mode: 'region') —
+ * AFMGData's own richer local terrain/hydrology sim, not a refinement of the
+ * parent planet's coarse cells (that refinement approach is what the in-house
+ * types use instead — see generateRegion() in region.js). Same Math.random-
+ * restore wrapper and async signature as generateHabitableSurface above.
+ * `sites` is intentionally NOT populated here — AFMGData is a terrain generator,
+ * not a population sim; site placement is done by region.js from terrain alone.
+ */
+export async function generateHabitableRegion(seed, opts = {}) {
+  const size = opts.sizeKm || 200;
+  const map = await withRestoredRandom(() => generateMap({
+    mode: 'region',
+    seed,
+    width: size,
+    height: size,
+    cells: opts.cells || 3000
+  }));
+
+  return {
+    seed,
+    bounds: { minX: 0, maxX: size, minY: 0, maxY: size },
+    cells: mapPackCells(map.pack),
+    features: mapFeatures(map.pack),
+    palette: mapPalette(map.pack.biomes)
+  };
+}

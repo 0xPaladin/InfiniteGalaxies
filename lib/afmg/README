@@ -1,0 +1,809 @@
+# Vanilla JS Map Generator
+
+A procedural world map generator built with vanilla JavaScript. Generates realistic terrain, climate, biomes, rivers, lakes, and ice features using Voronoi diagrams, noise-based heightmaps, and atmospheric circulation models.
+
+## About
+
+This map generator creates detailed world maps with realistic geographic and climatic features. It uses a combination of:
+
+- **Voronoi-based tessellation** for organic-looking terrain cells
+- **Simplex noise** for heightmap generation and climate variation
+- **Atmospheric circulation models** for realistic temperature and precipitation patterns
+- **Hydrological simulation** for river networks and lake formation
+- **Biome classification** based on temperature, moisture, and elevation
+
+### Key Features
+
+- **Procedural heightmaps** using templates or image-based generation
+- **Realistic climate modeling** with latitude-based temperature gradients and wind-driven precipitation
+- **Biome assignment** following Whittaker's biome classification adapted for procedural generation
+- **River generation** with tributary networks, discharge calculations, and lake interactions
+- **Lake detection** in deep depressions with climate-based evaporation modeling
+- **Ice/glacier generation** based on temperature thresholds
+- **Feature markup** identifying oceans, seas, gulfs, continents, islands, and lakes
+
+## Generation Paths
+
+`generateMap()` supports two distinct generation paths (geometries), selected with the
+`mode` option. Both paths run the same pipeline (heightmap → features → lakes → climate →
+regraph → rivers → biomes → ice) but differ in coordinate system and are not
+interchangeable mid-pipeline — pick one per map.
+
+| Mode | Aliases | Geometry | Cell coordinates | Voronoi | Modules |
+|------|---------|----------|-------------------|---------|---------|
+| `region` (default) | `flat`, `local` | Flat xy grid, `width`/`height` in km | `[x, y]` pixels | planar (Delaunator) | `utils/graphUtils.js`, `generators/heightmap-generator.js`, `generators/features.js`, `generators/lakes.js`, `generators/climate.js`, `generators/river-generators.js`, `generators/biomes.js` |
+| `planet` | `globe`, `world`, `sphere` | Full 3D globe, `planetRadius` in km | `[lon, lat]` degrees | spherical (`d3-geo-voronoi`) | `utils/planet_graph.js`, `generators/planet_heightmap.js`, `generators/planet_features.js`, `generators/planet_lakes.js`, `generators/planet_climate.js`, `generators/planet_river.js`, `generators/planet_biomes.js` |
+
+```javascript
+import { generateMap } from "./main.js";
+
+const regionMap = await generateMap({ mode: "region", width: 4000, height: 3000, seed: "r1" });
+const planetMap = await generateMap({ mode: "planet", template: "plates", nPlates: 30, seed: "p1" });
+```
+
+The registry that wires each mode to its modules lives in `src/paths.js` (`paths.region`,
+`paths.planet`, `resolvePath(mode)`). `generators/ice.js` and `utils/sphereMath.js` are
+shared by both paths.
+
+### Config keys by path
+
+Some config keys only make sense for one geometry and are set to that path's own default
+whenever the option isn't explicitly passed to `generateMap()` — so switching `mode` between
+calls (even reusing the same `config` object) never leaks the other path's settings:
+
+| Key | Region default | Planet default | Notes |
+|-----|-----------------|-----------------|-------|
+| `template` | random of `continents`/`oldWorld`/`shattered` | `"plates"` | see Templates below |
+| `tempRange` | `[0, 12, 20]` (north edge, center, south edge, °C) | `[-20, 27, -20]` (north pole, equator, south pole, °C) | same key, different meaning per path |
+| `winds` | `[225, 45, 90, 90, 45, 225]` (tiers, N→S) | `[240, 250, 260, 280, 290, 300]` (prevailing wind angles) | |
+| `width`, `height` | `5000` km each | n/a | region only |
+| `planetRadius` | n/a | `6371` km | planet only |
+| `nPlates`, `mountainPower` | n/a (ignored) | `30`, `1` | planet only, used when `template: "plates"` |
+
+### Templates
+
+Available heightmap templates (defined in `data/heightmap-templates.js`): `volcano`,
+`highIsland`, `lowIsland`, `continents`, `archipelago`, `atoll`, `mediterranean`,
+`peninsula`, `pangea`, `isthmus`, `shattered`, `taklamakan`, `oldWorld`, `fractious`.
+The planet path additionally recognizes `template: "plates"` (aliases `tectonic`/
+`tectonics`) as a special case handled by `generators/plate-tectonics.js` instead of a
+template script — see [Red Blob Games' spherical planet
+generation](https://github.com/redblobgames/1843-planet-generation).
+
+## How to Use
+
+### Quick Start
+
+1. Open `index.html` in a browser
+2. Enter generation options in the text field (comma-separated key:value pairs)
+3. Click "Build" to generate a map
+
+### Options
+
+| Option | Type | Description | Example |
+|--------|------|-------------|---------|
+| `mode` | string | Generation path: `region` (default) or `planet` — see [Generation Paths](#generation-paths) | `mode: planet` |
+| `seed` | string | Random seed for reproducible generation | `seed: abc123` |
+| `template` | string | Heightmap template name | `template: continents` |
+| `width` | number | Region path: map width in kilometers (default: 5000) | `width: 3000` |
+| `height` | number | Region path: map height in kilometers (default: 5000) | `height: 4000` |
+| `planetRadius` | number | Planet path: radius in kilometers (default: 6371) | `planetRadius: 6371` |
+| `nPlates` | number | Planet path: tectonic plate count, used with `template: plates` (default: 30) | `nPlates: 24` |
+| `tempRange` | number[] | Temperature triple in °C — meaning differs by path, see [Generation Paths](#generation-paths) | `tempRange: [-5, 20, 10]` |
+| `cells` | number | Number of Voronoi cells (default: 20000) | `cells: 50000` |
+| `prec` | number | Precipitation modifier (default: 50) | `prec: 100` |
+
+### Templates
+
+Available heightmap templates (defined in `data/heightmap-templates.js`):
+
+- `continents` - Large continental landmasses
+- `oldWorld` - Old World-style geography
+- `shattered` - Fragmented archipelago style
+
+### Dimensions and Temperature Range
+
+The core sizing is defined by `width` and `height` in kilometers (defaulting to 5000 km × 5000 km). 
+
+The temperature model spans across the map's defined height using `tempRange: [northEdge, center, southEdge]`:
+
+- **North Edge (`tempRange[0]`):** Temperature (°C) at the top border ($y = 0$).
+- **Center (`tempRange[1]`):** Temperature (°C) at the vertical midpoint ($y = \text{height} / 2$).
+- **South Edge (`tempRange[2]`):** Temperature (°C) at the bottom border ($y = \text{height}$).
+
+When rendered to the canvas, the map scales proportionally to fit within maximum canvas dimensions while preserving aspect ratio ($w / h$).
+
+### Programmatic Usage
+
+```javascript
+import { generateMap } from "./main.js";
+
+// Basic generation (defaults to 5000km x 5000km)
+const map = await generateMap({
+  seed: "mySeed",
+  template: "continents",
+  cells: 20000
+});
+
+// Custom dimensions and climate
+const map = await generateMap({
+  width: 3000,       // 3000 km wide
+  height: 2000,      // 2000 km high
+  tempRange: [-5, 22, 12], // [north edge, center, south edge] °C
+  prec: 75,
+  winds: [225, 45, 90, 90, 45, 225], // Wind direction tiers
+  seed: "regionalSeed"
+});
+```
+
+### Output Structure
+
+The `generateMap()` function returns an object with:
+
+```javascript
+{
+  grid: {
+    cells: {
+      i: Uint32Array,    // Cell indices
+      h: Uint8Array,     // Heights (0-100)
+      t: Int8Array,      // Terrain type (distance to coast)
+      f: Uint16Array,    // Feature IDs
+      c: Array,          // Neighbor cell lists
+      b: Uint8Array,     // Border cell flags
+      points: Array,     // [x, y] coordinates
+      cellsX: number,    // Cells in X direction
+      cellsY: number     // Cells in Y direction
+    },
+    features: Array      // Grid-level features (oceans, lakes, islands)
+  },
+  pack: {
+    cells: {
+      i: Uint32Array,    // Packed cell indices
+      p: Array,          // Packed cell points
+      g: Uint32Array,    // Grid cell references
+      h: Uint8Array,     // Packed heights
+      area: Uint16Array, // Cell areas
+      biome: Uint8Array, // Biome IDs
+      r: Uint16Array,    // River IDs
+      fl: Float64Array,  // River flux
+      conf: Uint16Array, // Confluence flags
+      haven: Uint32Array,// Opposite water cell
+      harbor: Uint8Array,// Adjacent water cells count
+      f: Uint16Array,    // Feature IDs
+      t: Int8Array       // Terrain type
+    },
+    vertices: {
+      p: Array,  // Vertex coordinates
+      v: Array,  // Adjacent vertices
+      c: Array   // Adjacent cells
+    },
+    biomes: Array,      // Biome definitions
+    features: Array,    // Packed features (oceans, seas, continents, etc.)
+    rivers: Array,      // River data
+    ice: Array          // Ice features (glaciers, icebergs)
+  }
+}
+```
+
+## API Reference
+
+### Main Module (`main.js`)
+
+#### `generateMap(options)`
+
+Generates a complete map with all features.
+
+**Parameters:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `mode` | string | `"region"` | Generation path: `region` or `planet` — see [Generation Paths](#generation-paths) |
+| `seed` | string | auto-generated | Random seed for reproducibility |
+| `template` | string | path-specific, see [Generation Paths](#generation-paths) | Heightmap template name |
+| `width` | number | 5000 | Region path: map width in kilometers |
+| `height` | number | 5000 | Region path: map height in kilometers |
+| `planetRadius` | number | 6371 | Planet path: radius in kilometers |
+| `nPlates` | number | 30 | Planet path: tectonic plate count (used when `template: "plates"`) |
+| `mountainPower` | number | 1 | Planet path: mountain height exaggeration for plate tectonics |
+| `tempRange` | number[] | path-specific, see [Generation Paths](#generation-paths) | Temperature triple in °C |
+| `cells` | number | 20000 | Number of Voronoi cells |
+| `prec` | number | 50 | Precipitation intensity modifier |
+| `winds` | number[] | path-specific, see [Generation Paths](#generation-paths) | Wind directions/angles |
+| `heightExponent` | number | 1 | Height scaling exponent |
+| `lakeElevationLimit` | number | 5 | Max elevation delta for lake closure |
+| `resolveDepressionsSteps` | number | 100 | Steps for depression resolution |
+
+**Returns:** Promise resolving to `{ grid, pack, mode, getPackPolygon }`, where `mode` is
+the resolved path id (`"region"` or `"planet"`) and `getPackPolygon(cellId)` returns that
+path's polygon for a packed cell, so renderers don't need to import a path-specific graph
+module directly.
+
+---
+
+### State Management (`src/state.js`)
+
+#### Configuration Object (`config`)
+
+Global configuration shared across generation modules.
+
+```javascript
+{
+  seed: null,                    // Current seed
+  cells: 20000,                  // Target cell count
+  template: null,                // Template name
+  width: 5000,                   // Map width (km)
+  height: 5000,                  // Map height (km)
+  tempRange: [-20, 27, -20],     // [north edge, center, south edge] (°C)
+  prec: 50,                      // Precipitation modifier
+  winds: [225, 45, 90, 90, 45, 225], // Wind directions per vertical tier
+  heightExponent: 1,             // Height scaling
+  lakeElevationLimit: 5,         // Lake closure threshold
+  resolveDepressionsSteps: 100   // Depression resolution steps
+}
+```
+
+#### State Variables
+
+| Variable | Type | Description |
+|----------|------|-------------|
+| `grid` | object | Current grid data |
+| `pack` | object | Packed graph data |
+| `seed` | string | Current generation seed |
+| `graphWidth` | number | Graph width in pixels |
+| `graphHeight` | number | Graph height in pixels |
+
+#### Setter Functions
+
+```javascript
+setGrid(g)        // Set grid data
+setPack(p)        // Set pack data
+setSeed(s)        // Set seed
+setGraphSize(w, h)     // Set graph dimensions
+```
+
+---
+
+### Heightmap Generator (`generators/heightmap-generator.js`)
+
+#### `HeightmapGenerator`
+
+Class for generating and manipulating heightmaps.
+
+**Methods:**
+
+| Method | Parameters | Description |
+|--------|------------|-------------|
+| `generate(graph)` | `graph` - Grid object | Generate heightmap from template or image |
+| `fromTemplate(graph, id)` | `graph`, `id` - Template ID | Generate from template steps |
+| `fromPrecreated(graph, id)` | `graph`, `id` - Image ID | Generate from PNG heightmap image |
+| `addHill(count, height, rangeX, rangeY)` | Count, height range, X range, Y range | Add hills to heightmap |
+| `addPit(count, height, rangeX, rangeY)` | Count, height range, X range, Y range | Add pits/depressions |
+| `addRange(count, height, rangeX, rangeY, start, end)` | Count, height, ranges, start/end cells | Add mountain ranges |
+| `addTrough(count, height, rangeX, rangeY, start, end)` | Count, height, ranges, start/end cells | Add troughs/valleys |
+| `addStrait(width, direction)` | Width, direction ("vertical"/"horizontal") | Carve straits through land |
+| `modify(range, add, mult, power)` | Range, add value, multiply factor, power | Modify heights mathematically |
+| `smooth(fr, add)` | Filter radius, addition | Smooth heightmap |
+| `mask(power)` | Power factor | Apply edge mask |
+| `invert(count, axes)` | Count, axes ("x", "y", "xy") | Invert heightmap |
+
+**Template Format:**
+
+Templates are defined in `data/heightmap-templates.js` as newline-separated steps:
+
+```
+Hill 3 20-40 10-90 10-90
+Range 2 30-60 20-80 20-80
+Pit 1 10-20 30-70 30-70
+```
+
+Each step: `Tool count height-range x-range y-range`
+
+---
+
+### Biomes (`generators/biomes.js`)
+
+#### `Biomes`
+
+Biome generator instance.
+
+**Methods:**
+
+| Method | Description |
+|--------|-------------|
+| `generate()` | Generate biomes for all cells |
+| `getDefault()` | Get default biome definitions |
+
+**Default Biomes:**
+
+| ID | Name | Color | Habitability | Cost |
+|----|------|-------|--------------|------|
+| 0 | Marine | #466eab | 0 | 10 |
+| 1 | Hot desert | #fbe79f | 4 | 200 |
+| 2 | Cold desert | #b5b887 | 10 | 150 |
+| 3 | Savanna | #d2d082 | 22 | 60 |
+| 4 | Grassland | #c8d68f | 30 | 50 |
+| 5 | Tropical seasonal forest | #b6d95d | 50 | 70 |
+| 6 | Temperate deciduous forest | #29bc56 | 100 | 70 |
+| 7 | Tropical rainforest | #7dcb35 | 80 | 80 |
+| 8 | Temperate rainforest | #409c43 | 90 | 90 |
+| 9 | Taiga | #4b6b32 | 12 | 200 |
+| 10 | Tundra | #96784b | 4 | 1000 |
+| 11 | Glacier | #d5e7eb | 0 | 5000 |
+| 12 | Wetland | #0b9131 | 12 | 150 |
+
+**Biome Assignment Logic:**
+
+Biomes are assigned based on:
+1. Temperature (from climate model)
+2. Moisture (precipitation + river flux)
+3. Elevation
+4. River presence
+
+The `biomesMatrix` maps moisture bands (0-4) against temperature bands (0-25) to biome IDs.
+
+---
+
+### Rivers (`generators/river-generators.js`)
+
+#### `Rivers`
+
+River generator instance.
+
+**Methods:**
+
+| Method | Description |
+|--------|-------------|
+| `generate()` | Generate river network |
+| `regenerate()` | Regenerate rivers and re-specify |
+| `specify()` | Add names and types to rivers |
+
+**River Properties:**
+
+```javascript
+{
+  i: number,           // River ID
+  source: number,      // Source cell ID
+  mouth: number,       // Mouth cell ID
+  discharge: number,   // Water discharge
+  length: number,      // River length
+  width: number,       // River width
+  widthFactor: number, // Width scaling factor
+  sourceWidth: number, // Source width
+  parent: number,      // Parent river ID (for tributaries)
+  cells: number[],     // Cell IDs along river
+  basin: number[],     // Basin cell IDs
+  name: string,        // River name
+  type: string         // River type (River, Creek, Brook, Stream, Fork, Branch)
+}
+```
+
+**River Types:**
+
+- **Main rivers:** River, Creek, Brook, Stream
+- **Forks/tributaries:** Fork, Branch
+
+---
+
+### Lakes (`generators/lakes.js`)
+
+#### `Lakes`
+
+Lake module instance.
+
+**Methods:**
+
+| Method | Description |
+|--------|-------------|
+| `defineShoreline(feature)` | Define lake shoreline cells |
+| `getHeight(feature)` | Calculate lake surface height |
+| `defineClimateData(heights)` | Calculate lake climate data (temp, evaporation, flux) |
+| `detectCloseLakes(h)` | Detect closed (endorheic) lakes |
+| `defineNames()` | Assign names to lakes |
+
+**Lake Properties:**
+
+```javascript
+{
+  i: number,           // Feature ID
+  type: "lake",        // Feature type
+  land: false,         // Is land feature
+  border: false,       // Touches map border
+  cells: number,       // Cell count
+  firstCell: number,   // First cell ID
+  vertices: number[],  // Vertex IDs
+  area: number,        // Area
+  shoreline: number[], // Shoreline cell IDs
+  height: number,      // Lake surface height
+  flux: number,        // Water flux
+  temp: number,        // Lake temperature
+  evaporation: number, // Evaporation rate
+  closed: boolean,     // Is endorheic (closed basin)
+  inlets: number[],    // Inlet river IDs
+  outlet: number       // Outlet river ID
+}
+```
+
+**Lake Generation:**
+
+1. `addLakesInDeepDepressions()` - Creates lakes in deep depressions
+2. `openNearSeaLakes()` - Opens lakes near sea level that can drain to ocean
+
+---
+
+### Climate (`generators/climate.js`)
+
+Climate module for temperature and precipitation modeling.
+
+#### `calculateTemperatures()`
+
+Calculates temperature for every grid cell based on:
+
+- **Vertical gradient:** Piecewise linear interpolation from north edge to center to south edge using `config.tempRange`
+- **2D atmospheric turbulence:** Multi-scale organic temperature waves via simplex noise
+- **Continentality:** Inland areas receive temperature modifiers based on distance from coast (`cells.t`)
+- **Altitude lapse rate:** Temperature drops by 6.5°C per 1km of elevation
+
+Results are stored in `cells.temp` as an `Int8Array`.
+
+#### `getTemperatureMoistureCapacity(tempC)`
+
+Calculates relative atmospheric moisture holding capacity using a Clausius-Clapeyron approximation (warm air holds exponentially more moisture than cold air). Replaces hardcoded planetary assumptions so arbitrary regional maps scale accurately.
+
+#### `generatePrecipitation()`
+
+Generates precipitation for every grid cell using:
+
+- **Thermal moisture capacity:** Inflowing air humidity is scaled by local temperature capacity
+- **Physical distance scaling:** Moisture loss per step is calibrated to actual physical distance ($km / cell$) using `config.width` and `config.height`
+- **Wind-driven transport:** Influx along prevailing wind directions (`config.winds`)
+- **Orographic lift:** Enhanced precipitation over hills and mountains
+- **Evapotranspiration recycling:** Moisture recharged over land from vegetation/transpiration
+- **Multi-pass 2D diffusion:** Neighbor-based moisture diffusion with organic atmospheric convection noise
+
+Results are stored in `cells.prec` as a `Uint8Array`.
+
+**Key Parameters:**
+
+| Parameter | Description |
+|-----------|-------------|
+| `config.tempRange` | `[northEdge, center, southEdge]` temperatures in °C |
+| `config.width` | Map width in kilometers (scales moisture penetration) |
+| `config.height` | Map height in kilometers |
+| `config.heightExponent` | Height scaling exponent for altitude temperature drop |
+| `config.prec` | Precipitation intensity modifier |
+| `config.winds` | Wind direction angles per vertical tier (N to S) |
+| `config.cells` | Cell count |
+
+---
+
+### Ice (`generators/ice.js`)
+
+#### `Ice`
+
+Ice feature generator instance.
+
+**Methods:**
+
+| Method | Description |
+|--------|-------------|
+| `generate()` | Generate glaciers and icebergs |
+| `regenerate()` | Regenerate ice features |
+| `addIceberg(cellId, size)` | Add iceberg at cell |
+| `removeIce(id)` | Remove ice feature |
+| `randomizeIcebergShape(id)` | Randomize iceberg shape |
+
+**Ice Types:**
+
+- **Glaciers** (`iceShield`): Generated on land where temp ≤ -8°C and height ≥ 20
+- **Icebergs:** Generated on water where temp ≤ 0°C
+
+**Ice Properties:**
+
+```javascript
+{
+  i: number,      // Ice feature ID
+  points: number[][], // Polygon points
+  type: "glacier" | "iceberg",
+  cellId: number, // Source cell (icebergs)
+  size: number    // Size factor (icebergs)
+}
+```
+
+---
+
+### Features (`generators/features.js`)
+
+#### `Features`
+
+Feature markup module instance.
+
+**Methods:**
+
+| Method | Description |
+|--------|-------------|
+| `markupGrid()` | Mark grid features (oceans, lakes, islands) |
+| `markupPack()` | Mark packed graph features |
+| `defineGroups()` | Define feature groups (ocean, sea, gulf, continent, island, isle, etc.) |
+
+**Feature Types:**
+
+- **Grid level:** ocean, lake, island
+- **Pack level:** ocean, sea, gulf, continent, island, isle, lake, lake_island
+
+**Feature Properties:**
+
+```javascript
+{
+  i: number,           // Feature ID
+  type: string,        // Feature type
+  land: boolean,       // Is land feature
+  border: boolean,     // Touches map border
+  cells: number,       // Cell count
+  firstCell: number,   // First cell ID
+  vertices: number[],  // Vertex IDs
+  area: number,        // Area
+  shoreline: number[], // Shoreline cells (lakes)
+  height: number       // Surface height (lakes)
+}
+```
+
+**Feature Groups:**
+
+| Group | Criteria |
+|-------|----------|
+| Ocean | > 4% of total cells |
+| Sea | > 0.1% of total cells |
+| Gulf | < 0.1% of total cells |
+| Continent | > 10% of total cells |
+| Island | > 0.1% of total cells |
+| Isle | < 0.1% of total cells |
+
+---
+
+### Voronoi (`generators/voronoi.js`)
+
+#### `Voronoi`
+
+Voronoi diagram generator from Delaunay triangulation.
+
+**Constructor:**
+
+```javascript
+new Voronoi(delaunay, points, pointsN)
+```
+
+**Properties:**
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `delaunay` | Delaunator | Delaunay triangulation |
+| `points` | number[][] | Point coordinates |
+| `pointsN` | number | Number of points |
+| `cells` | object | Voronoi cells |
+| `vertices` | object | Voronoi vertices |
+
+**Cell Structure:**
+
+```javascript
+{
+  v: number[],  // Adjacent vertex IDs
+  c: number[],  // Adjacent cell IDs
+  b: number     // Border flag (0/1)
+}
+```
+
+**Vertex Structure:**
+
+```javascript
+{
+  p: number[],  // Vertex coordinates [x, y]
+  v: number[],  // Adjacent vertex IDs
+  c: number[]   // Adjacent cell IDs
+}
+```
+
+---
+
+### Utilities (`utils/`)
+
+#### `arrayUtils.js`
+
+| Function | Description |
+|----------|-------------|
+| `last(array)` | Get last element |
+| `unique(array)` | Get unique elements |
+| `getTypedArray(maxValue)` | Get appropriate typed array constructor |
+| `createTypedArray({maxValue, length, from})` | Create typed array |
+
+#### `numberUtils.js`
+
+| Function | Description |
+|----------|-------------|
+| `rn(v, d)` | Round to d decimal places |
+| `minmax(value, min, max)` | Clamp value between min and max |
+| `lim(v)` | Clamp between 0 and 100 |
+| `normalize(val, min, max)` | Normalize to 0-1 range |
+| `lerp(a, b, t)` | Linear interpolation |
+
+#### `probability.js`
+
+| Function | Description |
+|----------|-------------|
+| `rand(min, max)` | Random integer in range |
+| `P(probability)` | Boolean with probability |
+| `each(n)` | Returns function that's true every n times |
+| `gauss(expected, deviation, min, max, round)` | Gaussian random |
+| `Pint(float)` | Integer with probability of rounding up |
+| `ra(array)` | Random array element |
+| `rw(object)` | Random weighted key from object |
+| `biased(min, max, ex)` | Biased random toward min |
+
+#### `graphUtils.js`
+
+| Function | Description |
+|----------|-------------|
+| `placePoints(graphWidth, graphHeight)` | Place jittered grid points |
+| `shouldRegenerateGrid(grid, expectedSeed, w, h)` | Check if grid needs regeneration |
+| `calculateVoronoi(points, boundary)` | Calculate Voronoi diagram |
+| `getPackPolygon(cellId)` | Get polygon for packed cell |
+
+#### `path.js`
+
+| Function | Description |
+|----------|-------------|
+| `getIsolines(graph, getType, options)` | Get isolines for cell types |
+| `getFillPath(vertices, vertexChain)` | Generate SVG fill path |
+| `getBorderPath(vertices, vertexChain, discontinue)` | Generate SVG border path |
+| `restorePath(exit, start, from)` | Restore path from exit to start |
+
+#### `index.js`
+
+Re-exports all utilities:
+
+```javascript
+import {
+  // From arrayUtils
+  last, unique, getTypedArray, createTypedArray, TYPED_ARRAY_MAX,
+  // From graphUtils
+  placePoints, shouldRegenerateGrid, calculateVoronoi, getPackPolygon,
+  // From numberUtils
+  rn, minmax, lim, normalize, lerp,
+  // From path
+  getIsolines, getFillPath, getBorderPath, restorePath,
+  // From probability
+  rand, P, each, gauss, Pint, ra, rw, biased,
+  // Plus
+  round, distanceSquared, isLand, isWater, findGridCell,
+  getNumberInRange, connectVertices, clipPoly, projectToNearestEdge,
+  meander, polylabel, lineclip
+} from "./utils/index.js";
+```
+
+---
+
+### Debug (`utils/debug.js`)
+
+Debug flags (all default to `false`):
+
+```javascript
+TIME    // Enable timing logs
+DEBUG   // Debug object for module-specific flags
+WARN    // Enable warnings
+ERROR   // Enable errors
+```
+
+Example usage:
+
+```javascript
+import { TIME, DEBUG } from "./utils/debug.js";
+
+TIME && console.time("operation");
+// ... code ...
+TIME && console.timeEnd("operation");
+
+DEBUG.temperature && console.info("Temperature:", temp);
+```
+
+---
+
+## Data Files
+
+### `data/heightmap-templates.js`
+
+Contains heightmap template definitions. Each template is a string of newline-separated steps:
+
+```javascript
+const heightmapTemplates = {
+  continents: {
+    name: "Continents",
+    template: `Hill 3 20-40 10-90 10-90
+Range 2 30-60 20-80 20-80
+Pit 1 10-20 30-70 30-70`
+  },
+  // ... more templates
+};
+```
+
+**Step Format:** `Tool count height-range x-range y-range`
+
+**Tools:**
+- `Hill` - Add hills
+- `Pit` - Add depressions
+- `Range` - Add mountain ranges
+- `Trough` - Add valleys
+- `Strait` - Carve straits
+- `Mask` - Apply edge mask
+- `Invert` - Invert heightmap
+- `Add` - Add to heights
+- `Multiply` - Multiply heights
+- `Smooth` - Smooth heights
+
+---
+
+## Rendering
+
+The included `index.html` renders the generated map to a canvas:
+
+```javascript
+function drawMap(map, ctx) {
+  const { pack } = map;
+  const biomes = pack.biomes;
+  const cells = pack.cells;
+  const scale = Math.min(MAX_W / graphWidth, MAX_H / graphHeight);
+
+  ctx.clearRect(0, 0, MAX_W, MAX_H);
+  ctx.fillStyle = biomes[0].color;  // Ocean color
+  ctx.fillRect(0, 0, MAX_W, MAX_H);
+
+  for (let i = 0; i < cells.i.length; i++) {
+    const biomeId = cells.biome[i];
+    const color = biomes[biomeId].color;
+    const poly = getPackPolygon(i);
+    
+    ctx.beginPath();
+    for (let j = 0; j < poly.length; j++) {
+      const [x, y] = poly[j];
+      const sx = x * scale;
+      const sy = y * scale;
+      if (j === 0) ctx.moveTo(sx, sy);
+      else ctx.lineTo(sx, sy);
+    }
+    ctx.closePath();
+    ctx.fillStyle = color;
+    ctx.fill();
+  }
+}
+```
+
+---
+
+## Dependencies
+
+External libraries (loaded via import maps in `index.html`):
+
+| Library | Version | Purpose |
+|---------|---------|---------|
+| d3 | 7.9.0 | Data visualization, geometry, statistics |
+| alea | 1.0.1 | Seeded random number generator |
+| simplex-noise | 4.0.3 | 2D/3D noise generation |
+| delaunator | 5.0.1 | Delaunay triangulation |
+| polylabel | 1.1.0 | Polygon label point finding |
+| lineclip | 1.1.5 | Line clipping |
+
+---
+
+## Spherical Conventions
+
+For globe rendering and coordinate systems:
+
+- Coordinates are `[lon, lat]` in degrees on a unit sphere
+- $lon \in [-180, 180]$, $lat \in [-90, 90]$
+- Spherical distances must use 3D unit vectors or haversine formulas
+- For longitude deltas across the antimeridian, use modular $\pm 180^\circ$ wrapping
+- Canvas/SVG globe rendering should use D3's `geoPath(projection, ctx)` with GeoJSON
+
+---
+
+## License
+
+[Add your license information here]

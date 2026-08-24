@@ -1,11 +1,17 @@
 import { PRNG } from '../random.js';
+import { childSeed } from '../seed.js';
+import { layoutPosition } from './layout.js';
 import { planetTypeData } from '../constants/astrophysics.js';
 import { GasGiantColors, RockyColors, TerrainColors } from "../constants/data.js"
 
+// NOTE: `parent` is used to read data during generation only — it is never stored
+// on the returned object (a raw parent ref would make the output circular and
+// break structuredClone/JSON.stringify; see IMPLEMENTATION_PLAN.md §0).
+// `parentSeed` is stored instead, so the relationship is still recoverable.
 function generatePlanetoid(parent, i, opts = {}) {
     let { seed = i, insolation, orbit } = opts;
 
-    const _seed = parent ? [parent.seed, seed].join(":") : seed;
+    const _seed = parent ? childSeed(parent.seed, seed) : seed;
     const prng = new PRNG(_seed);
 
     //orbit, eccentricity, and minor axis
@@ -15,7 +21,7 @@ function generatePlanetoid(parent, i, opts = {}) {
     let b = Math.sqrt(orbit * orbit * (1 - e * e));
 
     return {
-        parent,
+        parentSeed: parent ? parent.seed : null,
         seed,
         _seed,
         i,
@@ -47,7 +53,7 @@ function generateMoon(parent, opts) {
 
     return Object.assign(base,
         template.HI(parent.insolation, radius, density, hydrographics, atmosphere),
-        { type, color, radius, density, hydrographics, atmosphere })
+        { kind: 'moon', type, color, radius, density, hydrographics, atmosphere })
 }
 
 export function generatePlanet(parent, opts = {}) {
@@ -97,7 +103,7 @@ export function generatePlanet(parent, opts = {}) {
     })
 
     //update base
-    Object.assign(base, { type: _type, radius, density, hydrographics, atmosphere, color, orbits });
+    Object.assign(base, { kind: 'planet', type: _type, radius, density, hydrographics, atmosphere, color, orbits });
 
     const moonHI = [[], [], [], [], []];
     base.moons = Array.from({ length: nMajor + nMinor }, (_, j) => {
@@ -109,6 +115,10 @@ export function generatePlanet(parent, opts = {}) {
 
         //record hi
         moonHI[moon.HI - 1].push(j);
+        // layout: moon's orbital position around this planet, assigned at
+        // generation time (see galaxy/layout.js) — renderers only project it
+        moon.pos = layoutPosition(moon.orbit, j);
+        return moon;
     })
     base.moonHI = moonHI;
 

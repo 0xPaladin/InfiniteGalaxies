@@ -1,6 +1,8 @@
 import { PRNG } from '../random.js';
+import { childSeed } from '../seed.js';
 import { generateSystem } from './system.js';
 import { MakeName } from '../random_name.js';
+import { generateSectorHabitation } from '../population/habitation.js';
 
 function getPrismPosition(rng, { w, h, d }) {
   const x = rng.range(0, w * 10) / 10;
@@ -33,7 +35,7 @@ function getSpherePosition(rng, { r }) {
  * @param {number} seed
  * @returns {object} { map: string, stars: array, stats: object }
  */
-export function generateSector(seed = Date.now(), opts = {}) {
+export function generateSector(seed, opts = {}) {
   const rng = new PRNG(seed);
 
   const { bounds } = opts;
@@ -45,12 +47,18 @@ export function generateSector(seed = Date.now(), opts = {}) {
   const systems = [];
 
   // -------------------------------------------------
-  // 1. Seed 6–10 main-sequence habitable candidates
+  // 1. Seed 6–10 main-sequence habitable candidates, biased by this sector's
+  //    culture development (POPULATION_PLAN.md §9 step 8) — a core-tier sector
+  //    gets up to 2x the baseline habitable count, an abandoned/unclaimed one
+  //    as low as 0.5x. An explicit opts.nHab (the GUI slider) still overrides.
   // -------------------------------------------------
   let nHab = 6 + Math.floor(rng.rand() * 5); // 6–10
+  if (opts.ctx && opts.ctx.cultureId != null) {
+    nHab = Math.round(nHab * (0.5 + opts.ctx.development * 1.5));
+  }
   nHab = opts.nHab || nHab;
   for (let i = 0; i < nHab; i++) {
-    const system = generateSystem([seed, systems.length].join(':'), { forceHabitable: true });
+    const system = generateSystem(childSeed(seed, 'system', systems.length), { forceHabitable: true });
     system.name = MakeName(names, rng);
     system.pos = bounds.r ? getSpherePosition(rng, bounds) : getPrismPosition(rng, bounds);
     systems.push(system);
@@ -59,14 +67,16 @@ export function generateSector(seed = Date.now(), opts = {}) {
   // -------------------------------------------------
   // 2. Add remaining stars/multiples → total 90–120
   // -------------------------------------------------
-  let nSystems = 0// 90 + Math.floor(rng.rand() * 31); // 90–120
+  let nSystems = 90 + Math.floor(rng.rand() * 31); // 90–120
   nSystems = opts.nSystems || nSystems;
   while (systems.length < nSystems) {
-    const system = generateSystem([seed, systems.length].join(':'));
+    const system = generateSystem(childSeed(seed, 'system', systems.length));
     system.name = MakeName(names, rng);
     system.pos = bounds.r ? getSpherePosition(rng, bounds) : getPrismPosition(rng, bounds);
     systems.push(system);
   }
 
-  return { systems, seed, H, W, D };
+  const habitation = generateSectorHabitation(seed, opts.ctx, bounds);
+
+  return { systems, seed, H, W, D, r: bounds.r || null, gx: opts.gx, gy: opts.gy, habitation };
 }

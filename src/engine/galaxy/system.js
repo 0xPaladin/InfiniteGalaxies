@@ -1,8 +1,10 @@
 import { PRNG } from '../random.js';
+import { childSeed } from '../seed.js';
 import { generateStar } from './stars.js';
 import { generatePlanet } from './planet.js';
+import { layoutPosition } from './layout.js';
 
-const R_E = 6371;  //radius of earth in km 
+const R_E = 6371;  //radius of earth in km
 
 export function generateSystem(seed, opts = {}) {
     const starOpts = {
@@ -11,21 +13,21 @@ export function generateSystem(seed, opts = {}) {
     if (opts.primaryType) {
         starOpts.forcedType = opts.primaryType;
     }
-    //primary star 
-    const star = generateStar(new PRNG(seed + '-star'), starOpts);
+    //primary star
+    const star = generateStar(new PRNG(childSeed(seed, 'star')), starOpts);
 
     const system = { seed, star };
     const HI = [[], [], [], [], []];
     //generate planets
     let basePlanetData = generateSystemPlanets(seed, star);
     system.planets = basePlanetData.map((p, i) => {
-        //classification, radius, density, insolation (parent.star.luminosity), orbit 
+        //classification, radius, density, insolation (parent.star.luminosity), orbit
 
         const planet = generatePlanet(system, {
             i,
             classification: p.type === "gas giant" ? "gas giant" : "rocky",
             orbit: p.aAU,
-            radius: p.radiusRE * 6371 / 1000, //convert from RE to raw km/1000 
+            radius: p.radiusRE * 6371 / 1000, //convert from RE to raw km/1000
         })
         planet.periodDays = p.periodDays;
 
@@ -36,6 +38,20 @@ export function generateSystem(seed, opts = {}) {
         return planet;
     })
     system.HI = HI;
+
+    // ── Layout: assign orbital positions once, at generation time ──
+    // Order: primary (au 0), companions, then planets sorted by orbit.
+    let idx = 0;
+    star.primary.pos = layoutPosition(0, idx++);
+    star.companions.forEach(c => {
+        c.pos = layoutPosition(c.separationAU, idx++);
+    });
+    system.planets
+        .slice()
+        .sort((a, b) => a.orbit - b.orbit)
+        .forEach(p => {
+            p.pos = layoutPosition(p.orbit, idx++);
+        });
 
     return system;
 }
@@ -52,7 +68,7 @@ export function generateSystemPlanets(seed, star) {
     const companionSepAU = star.multiplicity === 1 ? null : star.companions[0].separationAU;
     const orbits = star.orbits;
 
-    const rand = new PRNG(seed);
+    const rand = new PRNG(childSeed(seed, 'planets'));
     const type = (primaryType || "G").toUpperCase().charAt(0);
 
     // --- Base occurrence modifiers by spectral type ---

@@ -1,62 +1,49 @@
 import { SPECTRAL_COLORS } from '../constants/defaults.js';
+import { project, radialBounds } from './view.js';
 
-const GLYPHS = {
-    '.': { type: 'empty space', fg: '#D3D3D3', bg: '#000000' },
-    'o': { type: 'rocky', fg: '#977402', bg: '#000000' },
-};
+/**
+ * Render a generated system as ASCII. Pure renderer per IMPLEMENTATION_PLAN.md §0:
+ * reads `system`, draws, returns hit-test data — never mutates `system`.
+ * Orbital positions (`.pos`) are assigned at generation time in galaxy/system.js —
+ * this renderer only projects them onto the grid.
+ *
+ * @returns {{index: import('./view.js').TileIndex}}
+ */
+export function RogueSystem(system, display, opts = {}) {
+  const { star, planets } = system;
+  const bodies = [star.primary, ...star.companions, ...planets];
+  const isStar = obj => obj.kind === 'star';
 
-export function RogueSystem(system, display, opts) {
-    const { star, planets, HI } = system;
-    const order = [];
+  const maxAu = Math.max(1, ...bodies.map(b => b.pos.au));
+  const side = Math.max(9, Math.min(60, (bodies.length + 1) * 3));
+  display.setOptions({ width: side, height: side, fontSize: 20 });
 
-    let placed = 0;
-    const orbitPosition = (au) => {
-        const [cx, cy] = [display._options.width / 2, display._options.height / 2];
-        const angle = 360 * (placed % 8) / 8;
-        const radians = Math.PI * angle;
-        const x = Math.round(cx + au * Math.cos(angle));
-        const y = Math.round(cx + au * Math.sin(angle));
-        placed++;
-        return { x, y };
-    }
+  const srcBounds = radialBounds(maxAu * 1.05);
+  const index = project(bodies, {
+    getPos: obj => ({ x: obj.pos.x, y: obj.pos.y }),
+    srcBounds,
+    width: side,
+    height: side
+  });
 
-    //get stars 
-    [star.primary, ...star.companions].forEach(s => {
-        const glyph = '🟏';
-        const fg = SPECTRAL_COLORS[s.spectral];
+  for (let x = 0; x < side; x++) {
+    for (let y = 0; y < side; y++) {
+      const items = index.at(x, y);
+      if (!items.length) continue;
 
-        if (s.role === 'primary') {
-            order.push([s, 0, glyph, fg]);
-        }
-        else {
-            order.push([s, s.separationAU, glyph, fg]);
-        }
-    })
+      // Prefer a star over a planet when stacked (the more informative glyph).
+      const obj = items.find(isStar) || items[0];
 
-    //planets
-    planets.forEach(p => {
-        const glyph = p.type === 'gas giant' ? '⬤' : '●';
-        const fg = p.HI === 1 ? '#228B22' : p.HI === 2 ? '#1E90FF' : p.color[0];
-        order.push([p, p.orbit, glyph, fg]);
-    })
-
-    const newD = (order.length + 1) * 3;
-    display.setOptions({
-        width: newD,
-        height: newD,
-        fontSize: 20
-    });
-
-    const tiles = new Map();
-
-    //now sort order and display
-    order.sort((a, b) => a[1] - b[1]).forEach(([obj, au, glyph, fg], i) => {
-        const { x, y } = orbitPosition(i * 2); // fixes spacing for display
+      if (isStar(obj)) {
+        display.draw(x, y, '🟏', SPECTRAL_COLORS[obj.spectral]);
+      } else {
+        const glyph = obj.type === 'gas giant' ? '⬤' : '●';
+        const color = Array.isArray(obj.color) ? obj.color[0] : obj.color;
+        const fg = obj.HI === 1 ? '#228B22' : obj.HI === 2 ? '#1E90FF' : color;
         display.draw(x, y, glyph, fg);
+      }
+    }
+  }
 
-        const xy = [x, y].join(',');
-        tiles.set(xy, obj);
-    })
-
-    system.tiles = tiles;
+  return { index };
 }

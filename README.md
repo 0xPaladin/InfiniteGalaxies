@@ -1,116 +1,262 @@
 # Infinite Galaxies
 
-Procedural generation of an entire galaxy, rendered in 3D with Three.js and procedural terrain via the World Engine.
-
-## Galaxies
-
-When you first open the page you will be greeted with a randomly generated galaxy rendered as a 3D star field. All of your tools to edit the galaxy will always be in the GUI on the right. Use OrbitControls to rotate the view (locked at 45° to the galactic plane).
-
-Galaxies have the following inputs:
-- Seed: The core seed for random generation. It effects the whole galaxy and everything else within.
-- Radius: The galaxy radius in 1000 ly increments. Between 40,000 and 60,000; the Milky way is ~50,000 ly.
-- Twist: How tight the spiral of the galaxy is. Between 30 and 150.
-- Culture Seed: You can set a different seed to generate the cultures of the galaxy. Currently cultures are not fully implemented, but you can see their claims.
-- Initial Cultures: Number of cultures to seed the galaxy with initial.
-- Generations: Number of generations to iterate for cultural expansion.
-
-**You have to press *update* to make any changes to the galaxy. You have to press *save* to save your changes so the galaxy is available after you reload the page.**
-
-Only the galaxy has a Save button. Sectors and Systems have **To Save** checkboxes — checking one flags that object for inclusion when the galaxy is saved. The galaxy save recursively collects all flagged sectors and systems.
-
-If you save your galaxy, when you come back you can select the galaxy seed from the dropdown on the right to load your saved work. Flagged sectors and systems will also appear in the load dropdowns.
-
-You can click anywhere on the galaxy to select individual sectors. Their ID appears in the "Sector Select" folder of the GUI. A crosshair marks the selected sector.
-
-![Opening screen, a galaxy with crosshairs](docs/galaxy_crosshairs.png)
-
-## Sectors
-
-The galaxy is sliced into 1000 ly cubic regions of space (1000 ly × 1000 ly × 1000 ly) called **sectors**. A sector is identified by its location (x, y) within the galactic plane. Each star is a clickable sprite; clicking selects the system and shows its info.
-
-The sector view uses an orthographic camera with zoom (0.5×–20×) and a grid overlay. Star positions are rendered in 3D with z-depth, and a three-axis crosshair marks the selected system.
-
-Sectors have the following inputs:
-- Seed: A seed that will modify the generation of the systems within the sector.
-- #of Systems: How many systems to generate within the sector. Between 32 and 256. The more systems, the longer the generation will take and the more crowded the display will be.
-
-![sector view](docs/sector.png)
-
-Use the **To Save** checkbox to flag this sector for inclusion when the galaxy is saved. Checked sectors appear in the load dropdown on the main galaxy page after reload.
-
-You can click on any star to get information about the system. Information will display on the top left, and you can edit various attributes in the bottom right of the GUI.
-
-System inputs:
-- Name
-- Position: The x, y, and z coordinates of the system within the sector.
-- Star Class: Change the primary star of the system. This will change how the planets are generated.
-
-## Systems
-
-The individual star systems that make up the galaxy. Each has its primary star (rendered with a procedural sun shader — sphere, rays, flares, and glow) and a row of planets with their own moons generated using World Engine terrain meshes.
-
-Planets are visible at medium LOD (N=3000). Clicking a planet upgrades its mesh to high detail (N=20000) and zooms the camera for close inspection. Planets have classification-based visual types: earthlike, barren, airless, and gas giants (with a procedural banded shader).
-
-System inputs:
-- Name
-- Seed: This seed effects how the system is generated. If changed, it will change the orbits, planet types and POI.
-- Star Class: Change the primary star of the system. This will change how the planets are generated.
-- #of Planets: The number of planets. Between 0 and 24. Changing this will change orbits and planet types.
-
-![system view](docs/system_system.png)
-
-Use the **To Save** checkbox to flag this system for inclusion when the galaxy is saved. Checked systems appear in the load dropdown on the main galaxy page after reload.
-
-If you click on any planet or moon you can view their information (top left), upgrade the mesh to full detail, zoom into a close-up view, and edit some of their attributes in the GUI.
-
-Planet/Moon inputs:
-- Seed: This seed effects how planet is generated. If changed, it could change temperature, hydrology, atmosphere, and any features (to be implemented).
-- Type: The type of planet. May be rocky (earthlike/barren/airless), gas giant, or brown dwarf.
-- Orbital Radius: Change the orbit of the planet, measured in AU.
-- Radius: The radius of the planet. This will change the gravity and habitability.
-- Density: The density of the planet. This will change the gravity and habitability.
-- #of Moons: The number of moons. Changing this will change their orbits as well.
-
-![system with planet selected](docs/system_planet.png)
-
-## Architecture
-
-The codebase is split into two layers:
-
-### Engine (`src/engine/`)
-
-All data generation lives here — no UI dependencies, no `App` references. Each class creates and manages its own domain objects:
-
-- `Galaxy` — spiral galaxy with cultures, sectors map
-- `MajorSector` — 1000 ly³ region containing star systems
-- `System` — star + planets + POI
-- `Planet` / `Moon` — planetary bodies with physics-based generation
-
-Engine classes accept callbacks (`onClick`, `display`, `save`, `setCrosshair`) passed via constructor options or set as properties. These callbacks are stored as `_onClick`, `_display`, etc. The class methods call these with `self` as the first argument, letting the consumer wire in rendering without the engine knowing about it.
+A seeded, procedural universe you explore in ASCII — click your way down from an entire galaxy to
+a single patch of terrain on a planet. Everything you see is generated on the fly from one seed:
+same seed in, same galaxy out, every time.
 
 ```
-display() → this._display(this, { onSectorClick: ... })
-click     → this._onClick(this, 'eventType', data)
-save()    → this._save(this.data)
+galaxy → sector → system → planet → region
 ```
 
-Child classes inherit callbacks from their parent — `MajorSector.refresh()` passes its `_onClick`/`_display` to every `new System()` it creates.
+At the top, a Conway's-Game-of-Life-style simulation grows cultures across the galaxy over 40
+generations, the way civilizations might actually spread and collapse. Each culture has a bioform
+(species type), a technology level (TL 4.0 to 5.9, advancing probabilistically each generation with
+a chance of transcendence at TL 5+), and trait vectors (expansionist, industrial, alien alignment).
+That simulation decides how "developed" any given patch of space is, which drives habitat
+placement — developed sectors get more habitable systems, and cultures build cities/outposts/
+megastructures on planets according to their TL, bioform affinity, and industrial sophistication.
+Some planets stay empty; others fill with dozens of settlements. Ruins mark the territory of
+extinct cultures, flavored by their extinction cause (died-out vs. transcended).
 
-World Engine terrain generation is vendored at `src/engine/system/we-planet.js` and `src/engine/render/planet-shaders.js`. The `Planetoid` base class encapsulates WE calls via its `generatePlanet()` method, keeping planet-render.js free of direct WE singleton state management.
+See `VISION.md` for the original target experience, `IMPLEMENTATION_PLAN.md` for the phased build
+plan (galaxy → region), and `POPULATION_PLAN.md` for the culture simulation specifically. This file
+is the practical "what is this and how do I use it" doc.
 
-### App Layer (`main.js`)
+> **History note:** the project originally rendered in 3D with Three.js. That renderer was removed
+> once the ASCII version covered the same ground — it's still recoverable from the `pre-3d-removal`
+> git tag if it's ever needed for reference.
 
-Imports both engine classes and Three.js view functions and bridges them via callbacks:
+---
+
+## Running it
+
+There's no build step. It's plain ES modules plus a handful of vendored/CDN scripts, so any static
+file server works:
+
+```bash
+python3 -m http.server
+```
+
+then open `index.html` in a browser.
+
+---
+
+## Using it
+
+You start in a **galaxy view** — a field of glyphs, one per 1000-light-year sector, colored by
+whichever culture currently holds that stretch of space:
+
+| Glyph | Meaning |
+|---|---|
+| `☉` `*` `:` `.` | Core → settled → frontier → fringe territory, colored by the owning culture |
+| `.` (dim gray) | Abandoned — once claimed, no one lives there now |
+| ` ` (blank) | Never claimed |
+
+Click a sector to generate and enter it. Inside, stars are laid out in 3D-ish space; click one to
+generate and enter its **system**, where you'll see the primary star, any companion stars, and
+planets arranged by orbital distance (a deterministic Fibonacci/golden-angle spiral, not randomly
+scattered).
+
+Click a planet — or a moon orbiting a gas giant — to descend to its **surface**: a biome-colored
+map of the whole world. A dropdown lets you re-color the same terrain by elevation, temperature, or
+moisture instead of biome. Click any point on that surface to drill into a **region** — a
+higher-resolution local view with its own terrain detail, plus real **habitats**
+(settlements, outposts, cities, orbital stations, megastructures — or ruins if the region fell within
+a dead empire's territory) with actual populations, and **features** (mountain peaks, water, rivers,
+coastlines) placed on the terrain. Deep-space stations and capital ships also appear as separate
+glyphs in the sector view.
+
+**Controls:**
+
+| Action | How |
+|---|---|
+| Descend | Click a sector / star / planet / surface tile |
+| Go back up one level | `Escape`, or the **Back** button in the GUI panel |
+| Step the culture simulation forward/back | **Step Forward ▸** / **◂ Step Back** in the GUI panel — scrubs through the 40 recorded generations without regenerating anything |
+| New galaxy | **New Galaxy** in the GUI panel (uses a fresh random seed) |
+| Save / Load / Delete Save | GUI panel buttons |
+
+The right-hand **GUI panel** (via [lil-gui](https://lil-gui.georgealways.com/)) also shows live
+info for whatever you're currently looking at (star count, spectral class, planet HI rating, region
+site/feature counts, current culture-simulation generation, etc.), and lets you tweak a couple of
+generation parameters (habitable-system count, total system count per sector) with a live
+regenerate.
+
+A breadcrumb bar above the display always shows where you are (`GALAXY ▸ Sector 3,-2 ▸ Vrecaur ▸
+Planet 2 ▸ Region 4,1`), and every click pops up a short toast with details about what you just
+selected.
+
+**Determinism, and what actually gets saved:** nothing you see is ever written to disk. What's
+persisted is just the galaxy seed, your navigation path (which sector/star/planet/tile you clicked
+down through), and which generation of the culture simulation you're viewing. Reloading the page
+*replays* that path back through generation from scratch — which is also the sharpest available
+test that generation stayed deterministic, since any drift would be immediately visible as "the
+save doesn't restore correctly."
+
+---
+
+## Project outline & tech stack
+
+**No build step, no bundler, no `package.json`.** Everything loads as native ES modules
+(`<script type="module">`) directly in the browser. A few libraries are vendored under `lib/` as
+plain scripts or loaded from CDN via an import map in `index.html`:
+
+| Library | Role |
+|---|---|
+| [ROT.js](https://ondras.github.io/rot.js/hp/) | ASCII display, drawing glyphs to a grid |
+| [lil-gui](https://lil-gui.georgealways.com/) | The control/info panel (loaded from CDN via ESM `import`) |
+| [localForage](https://localforage.github.io/localForage/) | Browser-storage persistence (seed + path only) |
+| [aleaPRNG](https://github.com/macmcmeans/aleaPRNG) | The seeded RNG every generator is built on |
+| [AFMGData](https://github.com/0xPaladin/AFMGData) (vendored, `lib/afmg/`) | Terrain/hydrology simulation for habitable worlds and their regions — see `docs/afmg-integration.md` |
+| tachyons.css | Base CSS utility classes |
+
+AFMGData brings its own CDN dependencies (d3, alea, simplex-noise, delaunator, polylabel,
+lineclip), declared in `index.html`'s import map and loaded lazily — a page session that never
+visits a habitable planet never fetches them.
+
+### Directory map
 
 ```
-Galaxy._display    → setGalaxyView(self, events)
-MajorSector._display → setSectorView(self, events)  
-System._display    → setSystemView(self, events)
-System._onClick    → info updates, GUI setup, planet upgrade/zoom
+index.html            entry point
+src/
+  rogue.js             app shell — the ONLY file allowed to call both a generator and a renderer
+  main.css
+  engine/
+    seed.js             the seed-chain contract (childSeed / coordSeed)
+    random.js            PRNG (alea-backed)
+    random_name.js       name generation
+    mixins.js             small math/string helpers on `window._`
+    constants/            static data: astrophysics tables, colors, HI() habitability scale
+    galaxy/                galaxy → sector → system → planet generators
+    planet/                 planet-surface generators (5 in-house types + AFMG habitable adapter) + region generator
+    population/              the culture / Game-of-Life simulation + habitat placement
+                              - sim.js: the main simulation with TL/bioform/trait evolution
+                              - bioform.js: 6 bioforms, affinity table (which worlds each prefers)
+                              - tech.js: Technology Level (4.0–5.9), advancement, transcendence
+                              - habitat.js: catalog of 16 habitat types (outposts through ringworlds)
+                              - context.js: CultureContext lookup for a given sector
+                              - habitation.js: placement engine for planet/system/sector habitats
+                              - native.js: pre-spacefaring culture generation
+    rogue/                    ASCII renderers — one per level, mirrors the generator folders
+lib/                    vendored third-party scripts, including AFMGData
+docs/afmg-integration.md   notes from integrating the vendored AFMGData generator
+IMPLEMENTATION_PLAN.md  phased build plan (galaxy through region)
+POPULATION_PLAN.md      the culture-simulation design doc
+VISION.md               original target-experience document
 ```
 
-The `UI/` directory contains lil-gui setup functions that read/write engine object properties, keeping GUI wiring separate from both the engine and the renderer.
+### The one architectural rule
 
-## Dependencies
+**Generation and display are completely separate, everywhere.** This is deliberate and
+non-negotiable — see `IMPLEMENTATION_PLAN.md` §0 for the full reasoning, but the short version:
 
-Three.js via CDN importmap (`three@0.184.0`), World Engine (vendored at `src/engine/`) for procedural terrain and sun shaders, Chance.js for seeded random generation, lil-gui for the control panel. All rendering is 3D WebGL.
+- **Generators** (`generate*` functions under `src/engine/{galaxy,planet,population}/`) take a
+  seed string (plus options) and return a plain, `structuredClone`-safe data object — no DOM
+  access, no drawing, no live references back to a parent object (that creates reference cycles,
+  which breaks cloning and saving).
+- **Renderers** (`Rogue*` functions under `src/engine/rogue/`) take that data object, draw it to a
+  `ROT.Display`, and hand back hit-test data for click handling. They never mutate what they're
+  given.
+- **`src/rogue.js`** is the app-layer glue — the only file allowed to call both a generator and a
+  renderer in the same function.
+
+The payoff: the ASCII renderer today could be swapped for an SVG or Three.js renderer later without
+touching a single generator, because nothing about the data model assumes how it'll be drawn.
+
+Every generator derives its seeds through `childSeed`/`coordSeed` in `src/engine/seed.js` — one
+delimiter, no ad-hoc string concatenation — so the full seed chain (`galaxy → sector → system →
+planet → region`, and `galaxy → population → culture`) stays collision-free and fully
+reproducible. Nothing under `src/engine/` calls `Math.random()`, `Date.now()`, or
+`crypto.randomUUID()` — entropy enters the system in exactly one place, `src/rogue.js`, when the
+user asks for a brand-new galaxy.
+
+---
+
+## API — the generators
+
+These are the functions that actually produce content. Each one takes a seed and returns a plain
+object; none of them draw anything.
+
+### Galaxy / sector / system / planet chain (`src/engine/galaxy/`)
+
+| Function | Signature | Returns |
+|---|---|---|
+| `generateGalaxy` | `(seed, {radius, sectorSize})` | `{seed, radius, sectorSize, sectors: [{gx, gy, seed}]}` — coordinates only, no sector content until clicked |
+| `generateSector` | `(seed, {bounds, nHab, nSystems, gx, gy, ctx})` | `{seed, gx, gy, systems: [...], habitation: {...}}` — `ctx` (from `cultureContextFor`) biases `nHab` based on culture development; sector-level habitats are placed in `habitation` |
+| `generateSystem` | `(seed, opts)` | `{seed, star, planets}` — orbital positions (`.pos = {au, angleDeg, x, y}`) are assigned here, at generation time, not by the renderer |
+| `generateStar` | `(rng, opts)` | a star record (spectral class, temperature, etc.) |
+| `generatePlanet` / `generateMoon` | `(seed, opts)` | a planet/moon record; `kind: 'planet'\|'moon'`, `parentSeed` (a string, never a live object reference) |
+
+### Planet surfaces & regions (`src/engine/planet/`)
+
+| Function | Signature | Returns |
+|---|---|---|
+| `generateSurface` | `async (planet, opts)` | a `PlanetSurface`: `{seed, type, bounds, cells: [{x, y, elev, temp, moisture, biome}], palette}` — `type` is one of `rocky \| icy \| hostile \| barren \| airless-moon \| habitable \| gas giant` |
+| `classify` | `(planet)` | which of those types a planet resolves to, from its existing `HI`/temperature/atmosphere fields |
+| `generateRegion` | `async (surface, rx, ry, opts)` | a higher-resolution local `{seed, rx, ry, bounds, cells, features, sites, palette}` — `opts.habitats` (from `generatePlanetHabitation`) and `opts.ctx` (from `cultureContextFor`) drive site placement; ruins are flavored by extinct-culture data |
+| `regionCoordsFor` | `(surfaceBounds, x, y)` | which `(rx, ry)` region a surface point falls in |
+
+Habitable worlds route through the vendored AFMGData generator (dynamically imported, so it's
+never fetched unless actually needed); the other five types are generated in-house from seeded
+value noise. See the earlier design discussion in this conversation, or `docs/afmg-integration.md`,
+for how they differ.
+
+### Population / culture simulation (`src/engine/population/`)
+
+| Function | Signature | Returns |
+|---|---|---|
+| `generatePopulation` | `(seed, {radius, steps})` | `{seed, radius, steps, history: [snapshot, ...], cultures: {id: cultureRecord}}` — the full simulation, precomputed, one snapshot per generation |
+| `buildSnapshotIndex` | `(snapshot)` | a `Map` from `"gx,gy"` to that cell's data, for O(1) lookup by renderers/generators |
+| `populationOf` | `(node, popIndex)` | *(in `galaxy/galaxy_gen.js`)* — the one place anything reads a sector's development score from |
+| `cultureContextFor` | `(popIndex, cultures, gx, gy)` | a `CultureContext` object: the culture data + development state for a given sector |
+| `generatePlanetHabitation` | `(seed, ctx, surface)` | `{seed, habitats: [...]}` — all settlements/outposts/cities/stations on a planet, placed by culture TL and bioform |
+| `generateSystemHabitation` | `(seed, ctx)` | stellar megastructures (collectors, ringworld segments) attached to a system's star |
+| `generateSectorHabitation` | `(seed, ctx, bounds)` | sector-level habitats (deep space stations, capital ships, derelicts, pirate havens) |
+| `generateNativeCulture` | `(seed, ctx, surface)` | a pre-spacefaring (TL 0–3) native culture on a planet, or null if none arose; entirely outside the main sim |
+
+A culture record now includes:
+
+```js
+{
+  id, parent, bornStep, deadStep, color, origin,
+  bioform: 'terran'|'cryophile'|...,
+  tl: 4.0..5.9,
+  traits: { expansionist, industrial, insular, alien },
+  extinctionCause: 'died-out'|'transcended'|null
+}
+```
+
+Cultures are **append-only** — a culture is never edited or deleted. When one dies out, surviving
+former territory can spark new "successor" cultures; when one grows large enough, it can split in
+two geographically. Both cases create a *new* culture id pointing back at the old one via `parent`,
+so the full lineage is always reconstructable. See `POPULATION_PLAN.md` for the full mechanics —
+it's a Game of Life variant with TL advancement, transcendence rolls, bioform drift, and habitatplacement all baked in.
+
+### Rendering (`src/engine/rogue/`)
+
+Every renderer follows the same shape: `Rogue<Level>(generatedData, display, opts) -> {index}`,
+where `index` is a `TileIndex` (from `rogue/view.js`) that the app layer uses to figure out what
+was clicked. `rogue/view.js` also exports `project()`, the shared world-space → screen-grid
+projection every renderer uses, so coordinate math is written once.
+
+---
+
+## What's not built yet
+
+The core population ↔ habitation loop is complete (Phase 6). Still on the horizon:
+
+- **Culture-flavored naming:** place names that reflect a culture's bioform, personality, and
+  history — deliberately deferred to Phase 8+.
+- **Buildings:** visual/structural detail on individual habitats — planned for a future phase, would
+  require a sub-level below region with actual architecture simulation.
+
+**Known limitation (§19 of `POPULATION_PLAN.md`):** The per-habitat population scaling with TL works
+correctly (high-TL habitats hold fewer people), but the aggregate effect goes the opposite way — a
+TL 5.9 culture's *total* civilization population is ~300x higher than a TL 4.0 one, because TL 5+
+unlocks five new megastructure types with enormous scale bands (ringworld segments up to 1e9
+population each). The qualitative story ("old cultures live in orbitals and megastructures, not on
+planets") holds; the "fewer total people" narrative doesn't. See `POPULATION_PLAN.md` §19 for
+options if this matters to you.
+
+Everything from galaxy down through region is otherwise complete and click-through-able end to end
+from a single seed.
