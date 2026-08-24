@@ -57,22 +57,25 @@ generate and enter its **system**, where you'll see the primary star, any compan
 planets arranged by orbital distance (a deterministic Fibonacci/golden-angle spiral, not randomly
 scattered).
 
-Click a planet — or a moon orbiting a gas giant — to descend to its **surface**: a biome-colored
-map of the whole world. A dropdown lets you re-color the same terrain by elevation, temperature, or
-moisture instead of biome. Click any point on that surface to drill into a **region** — a
-higher-resolution local view with its own terrain detail, plus real **habitats**
-(settlements, outposts, cities, orbital stations, megastructures — or ruins if the region fell within
-a dead empire's territory) with actual populations, and **features** (mountain peaks, water, rivers,
-coastlines) placed on the terrain. Deep-space stations and capital ships also appear as separate
-glyphs in the sector view.
+Click a planet — or a moon orbiting a gas giant — to descend to its **surface**. Unlike every other
+level, the planet view isn't ASCII: it's two side-by-side [d3](https://d3js.org/) orthographic
+hemispheres (near side / far side), each surface cell filled with its color only — no glyphs at this
+level. A dropdown still re-colors the same cells by elevation, temperature, or moisture instead of
+biome. Click a cell to drill into its **region** — every surface cell IS a region (a ~100km² square,
+its own local terrain generated via the vendored AFMG engine using a heightmap template chosen from
+that cell's own latitude and neighboring cells) — showing real **habitats** (settlements, outposts,
+cities, orbital stations, megastructures — or ruins if the region fell within a dead empire's
+territory) with actual populations, and **features** (mountain peaks, water, rivers, coastlines).
+Deep-space stations and capital ships also appear as separate glyphs in the sector view. Gas
+giants have no surface to drill into — click a moon (rendered as a dot) instead.
 
 **Controls:**
 
 | Action | How |
 |---|---|
-| Descend | Click a sector / star / planet / surface tile |
+| Descend | Click a sector / star / planet surface cell / region-terrain tile |
 | Go back up one level | `Escape`, or the **Back** button in the GUI panel |
-| Step the culture simulation forward/back | **Step Forward ▸** / **◂ Step Back** in the GUI panel — scrubs through the 40 recorded generations without regenerating anything |
+| Step the culture simulation forward/back | **Step Forward ▸** / **◂ Step Back** in the GUI panel — no ceiling; stepping past what's been computed so far extends the simulation live instead of recomputing from scratch |
 | New galaxy | **New Galaxy** in the GUI panel (uses a fresh random seed) |
 | Save / Load / Delete Save | GUI panel buttons |
 
@@ -83,8 +86,8 @@ generation parameters (habitable-system count, total system count per sector) wi
 regenerate.
 
 A breadcrumb bar above the display always shows where you are (`GALAXY ▸ Sector 3,-2 ▸ Vrecaur ▸
-Planet 2 ▸ Region 4,1`), and every click pops up a short toast with details about what you just
-selected.
+Planet 2 ▸ Region (14.2°,-38.7°)`), and every click pops up a short toast with details about what you
+just selected.
 
 **Determinism, and what actually gets saved:** nothing you see is ever written to disk. What's
 persisted is just the galaxy seed, your navigation path (which sector/star/planet/tile you clicked
@@ -103,16 +106,19 @@ plain scripts or loaded from CDN via an import map in `index.html`:
 
 | Library | Role |
 |---|---|
-| [ROT.js](https://ondras.github.io/rot.js/hp/) | ASCII display, drawing glyphs to a grid |
+| [ROT.js](https://ondras.github.io/rot.js/hp/) | ASCII display for every level except the planet view |
+| [d3](https://d3js.org/) + [d3-geo-voronoi](https://github.com/Fil/d3-geo-voronoi) | The planet-level view: two orthographic-projection hemispheres, cell fills built from a spherical Voronoi mesh over the surface cells |
 | [lil-gui](https://lil-gui.georgealways.com/) | The control/info panel (loaded from CDN via ESM `import`) |
 | [localForage](https://localforage.github.io/localForage/) | Browser-storage persistence (seed + path only) |
 | [aleaPRNG](https://github.com/macmcmeans/aleaPRNG) | The seeded RNG every generator is built on |
-| [AFMGData](https://github.com/0xPaladin/AFMGData) (vendored, `lib/afmg/`) | Terrain/hydrology simulation for habitable worlds and their regions — see `docs/afmg-integration.md` |
+| [AFMGData](https://github.com/0xPaladin/AFMGData) (vendored, `lib/afmg/`) | Terrain/hydrology simulation, used for EVERY planet type's regions now (not just habitable worlds) — see `docs/afmg-integration.md` |
 | tachyons.css | Base CSS utility classes |
 
 AFMGData brings its own CDN dependencies (d3, alea, simplex-noise, delaunator, polylabel,
-lineclip), declared in `index.html`'s import map and loaded lazily — a page session that never
-visits a habitable planet never fetches them.
+lineclip), declared in `index.html`'s import map. `d3`/`d3-geo-voronoi` load on every session now
+(the planet view needs them regardless of planet type); AFMG's heavier terrain-sim dependencies
+(alea, simplex-noise, delaunator, polylabel, lineclip) still load lazily, only once a region is
+actually entered.
 
 ### Directory map
 
@@ -128,7 +134,10 @@ src/
     mixins.js             small math/string helpers on `window._`
     constants/            static data: astrophysics tables, colors, HI() habitability scale
     galaxy/                galaxy → sector → system → planet generators
-    planet/                 planet-surface generators (5 in-house types + AFMG habitable adapter) + region generator
+    planet/                 planet-surface generators (5 in-house types + AFMG habitable adapter)
+                              - region.js: per-cell region generator (every surface cell is a region)
+                              - region-templates.js: neighbor lookup + AFMG heightmap template selection
+                              - profiles.js: exposes each in-house type's own biome/moisture/temp logic to region.js
     population/              the culture / Game-of-Life simulation + habitat placement
                               - sim.js: the main simulation with TL/bioform/trait evolution
                               - bioform.js: 6 bioforms, affinity table (which worlds each prefers)
@@ -137,7 +146,8 @@ src/
                               - context.js: CultureContext lookup for a given sector
                               - habitation.js: placement engine for planet/system/sector habitats
                               - native.js: pre-spacefaring culture generation
-    rogue/                    ASCII renderers — one per level, mirrors the generator folders
+    rogue/                    renderers — one per level, mirrors the generator folders. ASCII/ROT.Display
+                              for every level except planet.js, which renders via d3 (see above)
 lib/                    vendored third-party scripts, including AFMGData
 docs/afmg-integration.md   notes from integrating the vendored AFMGData generator
 IMPLEMENTATION_PLAN.md  phased build plan (galaxy through region)
@@ -154,9 +164,10 @@ non-negotiable — see `IMPLEMENTATION_PLAN.md` §0 for the full reasoning, but 
   seed string (plus options) and return a plain, `structuredClone`-safe data object — no DOM
   access, no drawing, no live references back to a parent object (that creates reference cycles,
   which breaks cloning and saving).
-- **Renderers** (`Rogue*` functions under `src/engine/rogue/`) take that data object, draw it to a
-  `ROT.Display`, and hand back hit-test data for click handling. They never mutate what they're
-  given.
+- **Renderers** (`Rogue*` functions under `src/engine/rogue/`) take that data object, draw it (to a
+  `ROT.Display` for every level except `planet.js`, which draws to a plain DOM element via d3 — see
+  the tech-stack table above), and hand back hit-test data (or, for the d3 planet view, wire click
+  callbacks directly). They never mutate what they're given.
 - **`src/rogue.js`** is the app-layer glue — the only file allowed to call both a generator and a
   renderer in the same function.
 
@@ -193,19 +204,23 @@ object; none of them draw anything.
 |---|---|---|
 | `generateSurface` | `async (planet, opts)` | a `PlanetSurface`: `{seed, type, bounds, cells: [{x, y, elev, temp, moisture, biome}], palette}` — `type` is one of `rocky \| icy \| hostile \| barren \| airless-moon \| habitable \| gas giant` |
 | `classify` | `(planet)` | which of those types a planet resolves to, from its existing `HI`/temperature/atmosphere fields |
-| `generateRegion` | `async (surface, rx, ry, opts)` | a higher-resolution local `{seed, rx, ry, bounds, cells, features, sites, palette}` — `opts.habitats` (from `generatePlanetHabitation`) and `opts.ctx` (from `cultureContextFor`) drive site placement; ruins are flavored by extinct-culture data |
-| `regionCoordsFor` | `(surfaceBounds, x, y)` | which `(rx, ry)` region a surface point falls in |
+| `generateRegion` | `async (surface, cellIndex, opts)` | one surface cell's local region: `{seed, cellIndex, lon, lat, template, bounds, cells, features, sites, palette}` — bounds are always a ~100km² square regardless of planet type. `template` is one of AFMG's 14 named heightmap shapes, chosen from the cell's own latitude + neighbors (`region-templates.js`); `opts.habitats`/`opts.ctx` drive site placement same as before |
+| `regionCellIndexFor` | `(surface, x, y)` | which surface cell (by index) a clicked point is nearest to |
 
-Habitable worlds route through the vendored AFMGData generator (dynamically imported, so it's
-never fetched unless actually needed); the other five types are generated in-house from seeded
-value noise. See the earlier design discussion in this conversation, or `docs/afmg-integration.md`,
-for how they differ.
+Every planet type's regions now route through the vendored AFMGData generator (for its
+geologically-plausible terrain shape); non-habitable types (rocky/icy/hostile/barren/airless-moon)
+then discard AFMG's own Earth-biome classification and re-derive biome/moisture through that
+type's own calibrated profile (`profiles.js`) instead — see `region.js`'s comments for why. Surface
+generation itself (not regions) is unchanged: habitable surfaces still route through AFMGData, the
+other five types are still generated in-house from seeded value noise.
 
 ### Population / culture simulation (`src/engine/population/`)
 
 | Function | Signature | Returns |
 |---|---|---|
-| `generatePopulation` | `(seed, {radius, steps})` | `{seed, radius, steps, history: [snapshot, ...], cultures: {id: cultureRecord}}` — the full simulation, precomputed, one snapshot per generation |
+| `generatePopulation` | `(seed, {radius, steps})` | `{seed, radius, steps, history: [snapshot, ...], cultures: {id: cultureRecord}}` — runs the whole simulation in one shot |
+| `initPopulation` / `advancePopulation` | `(seed, opts)` / `(state, toStep)` | the live/extensible form — `initPopulation` sets up genesis only, `advancePopulation` runs it forward in place. Used by `rogue.js` so "step forward" has no ceiling: stepping past what's computed so far extends the same live state instead of recomputing from scratch, and produces byte-identical results either way (every step's RNG derives from the absolute step number, never from how many steps came before it) |
+| `populationView` | `(state)` | the plain, `structuredClone`-safe `{seed, radius, sectorSize, steps, history, cultures}` shape every renderer/context reads, derived from a live state object |
 | `buildSnapshotIndex` | `(snapshot)` | a `Map` from `"gx,gy"` to that cell's data, for O(1) lookup by renderers/generators |
 | `populationOf` | `(node, popIndex)` | *(in `galaxy/galaxy_gen.js`)* — the one place anything reads a sector's development score from |
 | `cultureContextFor` | `(popIndex, cultures, gx, gy)` | a `CultureContext` object: the culture data + development state for a given sector |
