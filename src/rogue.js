@@ -12,8 +12,8 @@ import { GUI } from 'https://cdn.jsdelivr.net/npm/lil-gui@0.21/+esm';
 import { generateGalaxy } from './engine/galaxy/galaxy_gen.js';
 import { generateSector } from './engine/galaxy/sector.js';
 import { generateSurface } from './engine/planet/types.js';
-import { generateRegion, regionCoordsFor } from './engine/planet/region.js';
-import { generatePopulation, buildSnapshotIndex } from './engine/population/sim.js';
+import { generateRegion } from './engine/planet/region.js';
+import { initPopulation, advancePopulation, populationView, buildSnapshotIndex } from './engine/population/sim.js';
 import { cultureContextFor } from './engine/population/context.js';
 import { generatePlanetHabitation, generateSystemHabitation } from './engine/population/habitation.js';
 import { generateNativeCulture } from './engine/population/native.js';
@@ -24,7 +24,7 @@ import { RogueSystem } from './engine/rogue/system.js';
 import { RoguePlanet } from './engine/rogue/planet.js';
 import { RogueRegion } from './engine/rogue/region.js';
 
-const PLANET_OVERLAYS = ['biome', 'elevation', 'temperature', 'moisture', 'regions'];
+const PLANET_OVERLAYS = ['biome', 'elevation', 'temperature', 'moisture'];
 
 // ── Globals ──────────────────────────────────────────────────────────
 const DB_KEY = 'rogue-galaxies';
@@ -107,10 +107,15 @@ class RogueApp {
         const host = $('display');
         host.appendChild(this.display.getContainer());
 
-        // Click handling
+        // Click handling (ROT-ASCII levels only — the d3-driven planet view wires
+        // its own per-element click handlers directly, see _render()'s 'planet' branch)
         const container = this.display.getContainer();
         container.addEventListener('click', (ev) => this._onClick(ev));
         container.style.cursor = 'crosshair';
+
+        // The d3 planet view's host — a sibling of #display, toggled visible only
+        // at the 'planet' level (_setViewMode)
+        this.planetHost = $('planetDisplay');
 
         // Resize / keys
         window.addEventListener('resize', this._resizeHandler);
@@ -183,16 +188,28 @@ class RogueApp {
     // ── Navigation (push/pop a view stack; each level is generate-then-render) ──
     _enterGalaxy() {
         const data = generateGalaxy(this.galaxySeed, { radius: this.galaxyRadius });
-        this.population = generatePopulation(this.galaxySeed, { radius: this.galaxyRadius, steps: this.popSteps });
-        this.popStep = this.population.steps; // default to the final, most-developed generation
+        // `_popState` is the LIVE, extensible simulation (sim.js's initPopulation/
+        // advancePopulation) — `this.population` is just the plain snapshot view of
+        // it (populationView), same shape every renderer/context already expects.
+        this._popState = initPopulation(this.galaxySeed, { radius: this.galaxyRadius });
+        advancePopulation(this._popState, this.popSteps);
+        this.population = populationView(this._popState);
+        this.popStep = this.population.steps; // default to the most-developed generation computed so far
         this.stack = [{ level: 'galaxy', data }];
         this._render();
     }
 
+    // Step forward has no ceiling — stepping past what's been computed so far
+    // extends the live simulation (sim.js's advancePopulation) instead of
+    // recomputing from scratch, so scrubbing far past the original cap stays cheap.
     _stepPopulation(delta) {
-        if (!this.population) return;
-        const next = Math.max(0, Math.min(this.population.steps, this.popStep + delta));
+        if (!this._popState) return;
+        const next = Math.max(0, this.popStep + delta);
         if (next === this.popStep) return;
+        if (next > this._popState.step) {
+            advancePopulation(this._popState, next);
+            this.population = populationView(this._popState);
+        }
         this.popStep = next;
         if (this.top && this.top.level === 'galaxy') this._render();
         this._persist();
@@ -239,13 +256,14 @@ class RogueApp {
     }
 
     // `surface` comes from the current top-of-stack 'planet' frame — a region is
-    // addressed by (rx,ry) coordinates into that surface's grid, not looked up
-    // from a list (see engine/planet/region.js). `habitats` lets the region
-    // surface real sites instead of inventing them (POPULATION_PLAN.md §14.2).
-    async _enterRegion(rx, ry) {
+    // one surface cell (POPULATION_PLAN.md: "each planet cell is a region"),
+    // addressed by its index into that surface's cells, not a coordinate grid
+    // (see engine/planet/region.js). `habitats` lets the region surface real
+    // sites instead of inventing them (POPULATION_PLAN.md §14.2).
+    async _enterRegion(cellIndex) {
         const surface = this.top.data;
         const habitats = this.top.habitation ? this.top.habitation.habitats : [];
-        const region = await generateRegion(surface, rx, ry, { habitats, ctx: this.currentCtx });
+        const region = await generateRegion(surface, cellIndex, { habitats, ctx: this.currentCtx });
         this.stack.push({ level: 'region', data: region });
         this._render();
         this._persist();
@@ -276,8 +294,15 @@ class RogueApp {
 
     async _restore(galaxySeed, path, popStep) {
         this.galaxySeed = galaxySeed;
-        this._enterGalaxy(); // resets popStep to the final generation
-        if (popStep != null) this.popStep = Math.max(0, Math.min(this.population.steps, popStep));
+        this._enterGalaxy(); // resets popStep to the default cap
+        if (popStep != null) {
+            const target = Math.max(0, popStep);
+            if (target > this._popState.step) {
+                advancePopulation(this._popState, target);
+                this.population = populationView(this._popState);
+            }
+            this.popStep = target;
+        }
         if (!path.length) this._render(); // still at galaxy level — reflect the restored step
         for (const step of path) {
             if (step.level === 'sector') {
@@ -297,7 +322,7 @@ class RogueApp {
                 if (!moonObj) break;
                 await this._enterPlanet(moonObj);
             } else if (step.level === 'region' && this.top.level === 'planet') {
-                await this._enterRegion(step.rx, step.ry);
+                await this._enterRegion(step.cellIndex);
             } else {
                 break;
             }
@@ -323,17 +348,28 @@ class RogueApp {
             } else if (frame.level === 'planet' && prev.level === 'planet') {
                 path.push({ level: 'planet', from: 'planet', index: prev.planet.moons.indexOf(frame.planet) });
             } else if (frame.level === 'region') {
-                path.push({ level: 'region', rx: frame.data.rx, ry: frame.data.ry });
+                path.push({ level: 'region', cellIndex: frame.data.cellIndex });
             }
         }
         return path;
     }
 
     // ── Rendering ──────────────────────────────────────────────────
+    // Only the 'planet' level renders via d3/SVG into #planetDisplay; every
+    // other level draws into the shared ROT.Display (#display). Toggling which
+    // container is visible is the only thing that needs to happen to switch —
+    // both renderers already redraw their own content unconditionally each call.
+    _setViewMode(level) {
+        const rotVisible = level !== 'planet';
+        $('display').style.display = rotVisible ? 'flex' : 'none';
+        this.planetHost.style.display = rotVisible ? 'none' : 'flex';
+    }
+
     _render() {
         if (!this.top) return;
         const { level, data } = this.top;
 
+        this._setViewMode(level);
         this.display.clear();
         this._updateBreadcrumb();
         this._updateInfo();
@@ -355,7 +391,17 @@ class RogueApp {
             const mega = (this.top.habitation && this.top.habitation.habitats.length) || 0;
             toast(`${data.name || 'System'} — ${data.planets.length} planets${mega ? `, ${mega} stellar megastructure(s)` : ''}`);
         } else if (level === 'planet') {
-            this.top.index = RoguePlanet(this.top.planet, data, this.display, { overlay: this.planetOverlay }).index;
+            RoguePlanet(this.top.planet, data, this.planetHost, {
+                overlay: this.planetOverlay,
+                onCellClick: (cellIndex) => {
+                    toast(`Descending to region ${cellIndex}...`);
+                    this._enterRegion(cellIndex).catch(err => { console.error(err); toast('Error: ' + err.message); });
+                },
+                onMoonClick: (moon) => {
+                    toast(`Descending to moon...`);
+                    this._enterPlanet(moon).catch(err => { console.error(err); toast('Error: ' + err.message); });
+                }
+            });
             const habCount = (this.top.habitation && this.top.habitation.habitats.length) || 0;
             const nativeNote = this.top.native ? ` — native ${this.top.native.bioform} culture (TL ${this.top.native.tl})` : '';
             toast((data.type === 'gas giant'
@@ -363,7 +409,7 @@ class RogueApp {
                 : `${data.type} world — HI ${data.HI}`) + (habCount ? `, ${habCount} habitats` : '') + nativeNote);
         } else if (level === 'region') {
             this.top.index = RogueRegion(data, this.display).index;
-            toast(`Region ${data.rx},${data.ry} — ${data.sites.length} sites`);
+            toast(`Region (${data.lon.toFixed(1)}°,${data.lat.toFixed(1)}°) — ${data.template} — ${data.sites.length} sites`);
         }
         console.log(this.top);
     }
@@ -376,7 +422,7 @@ class RogueApp {
             if (frame.level === 'sector') return `Sector ${frame.data.gx},${frame.data.gy}`;
             if (frame.level === 'system') return frame.data.name || 'System';
             if (frame.level === 'planet') return frame.planet.kind === 'moon' ? 'Moon' : `Planet ${(frame.planet.i ?? 0) + 1}`;
-            if (frame.level === 'region') return `Region ${frame.data.rx},${frame.data.ry}`;
+            if (frame.level === 'region') return `Region (${frame.data.lon.toFixed(1)}°,${frame.data.lat.toFixed(1)}°)`;
             return frame.level;
         });
         el.textContent = parts.join(' ▸ ');
@@ -422,7 +468,8 @@ class RogueApp {
                 this.infoFolder.add({ v: `${this.top.native.bioform}, TL ${this.top.native.tl}, pop ~${this.top.native.population.toLocaleString()}` }, 'v').name('Native culture').disable();
             }
         } else if (level === 'region') {
-            this.infoFolder.add({ v: `${data.rx},${data.ry}` }, 'v').name('Coords').disable();
+            this.infoFolder.add({ v: `${data.lon.toFixed(1)}°, ${data.lat.toFixed(1)}°` }, 'v').name('Coords').disable();
+            this.infoFolder.add({ v: data.template }, 'v').name('Template').disable();
             this.infoFolder.add({ v: data.sites.length }, 'v').name('Sites').disable();
             this.infoFolder.add({ v: data.features.length }, 'v').name('Features').disable();
         }
@@ -457,18 +504,6 @@ class RogueApp {
                 this._enterPlanet(obj).catch(err => { console.error(err); toast('Error: ' + err.message); });
             } else {
                 toast(`Star — ${obj.role}`);
-            }
-        } else if (level === 'planet') {
-            const obj = items[0];
-            if (obj.kind === 'moon') {
-                toast(`Descending to moon...`);
-                this._enterPlanet(obj).catch(err => { console.error(err); toast('Error: ' + err.message); });
-            } else {
-                // a surface cell — descend into its region
-                const surface = this.top.data;
-                const { rx, ry } = regionCoordsFor(surface.bounds, obj.x, obj.y);
-                toast(`Descending to region ${rx},${ry}...`);
-                this._enterRegion(rx, ry).catch(err => { console.error(err); toast('Error: ' + err.message); });
             }
         } else if (level === 'region') {
             const obj = items[0];

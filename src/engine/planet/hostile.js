@@ -2,7 +2,7 @@ import { buildSurfaceCells, makeSurface } from './common.js';
 
 // Venus-like: high volcanism, acid/corrosive lowlands, crushing high-pressure
 // atmosphere. High relief variance and hot everywhere, not just by latitude.
-const PALETTE = {
+export const PALETTE = {
   lava_field: { glyph: '≡', fg: '#ff5522', bg: '#220000' },
   volcanic_highland: { glyph: '▲', fg: '#994422', bg: '#220000' },
   acid_lowland: { glyph: '~', fg: '#aacc33', bg: '#220000' },
@@ -25,6 +25,8 @@ function biome(elev, moisture) {
   if (elev > 45) return 'lava_field';
   return moisture > 30 ? 'acid_lowland' : 'scorched_plain';
 }
+
+export const PROFILE = { elevation, moisture, temperature, biome };
 
 export function generateHostile(seed, planet, opts = {}) {
   const cells = buildSurfaceCells(seed, opts, { elevation, moisture, temperature, biome });

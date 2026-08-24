@@ -105,22 +105,37 @@ function mapFeatures(pack) {
 }
 
 /**
- * Habitable-world region via the vendored AFMGData generator (mode: 'region') —
- * AFMGData's own richer local terrain/hydrology sim, not a refinement of the
- * parent planet's coarse cells (that refinement approach is what the in-house
- * types use instead — see generateRegion() in region.js). Same Math.random-
- * restore wrapper and async signature as generateHabitableSurface above.
- * `sites` is intentionally NOT populated here — AFMGData is a terrain generator,
- * not a population sim; site placement is done by region.js from terrain alone.
+ * A local ~square region via the vendored AFMGData generator (mode: 'region') —
+ * AFMGData's own terrain/hydrology sim for one planet surface cell's worth of
+ * local detail (POPULATION_PLAN.md's per-cell-region design: one surface cell
+ * = one region, sized ~100km² by default, "square bounds"). Used for EVERY
+ * planet type, not just habitable ones — `opts.template` is chosen by
+ * region-templates.js from the cell's own latitude/neighbor context, not left
+ * to AFMG's internal random pick, so the terrain SHAPE (mountains vs. plains vs.
+ * archipelago, etc.) actually reflects where on the planet this region sits.
+ *
+ * For non-habitable planet types, region.js discards this map's own biome
+ * classification (`cells[].biome` below) and re-derives it from that planet
+ * type's own profile.biome() instead — AFMGData's biome classifier assumes an
+ * Earth-like water cycle that doesn't fit a barren/hostile/icy/airless world;
+ * only the geologically-plausible elevation SHAPE this generates gets reused
+ * there. Same Math.random-restore wrapper and async signature as
+ * generateHabitableSurface above. `sites` is intentionally NOT populated here —
+ * AFMGData is a terrain generator, not a population sim; site placement is done
+ * by region.js from terrain + habitation data.
+ *
+ * @param {string} seed
+ * @param {{sizeKm?: number, cells?: number, template?: string}} [opts]
  */
-export async function generateHabitableRegion(seed, opts = {}) {
-  const size = opts.sizeKm || 200;
+export async function generateTemplatedRegion(seed, opts = {}) {
+  const size = opts.sizeKm || 100;
   const map = await withRestoredRandom(() => generateMap({
     mode: 'region',
     seed,
     width: size,
     height: size,
-    cells: opts.cells || 3000
+    cells: opts.cells || 2500,
+    template: opts.template
   }));
 
   return {

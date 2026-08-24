@@ -279,20 +279,19 @@ function buildSnapshot(step, grid, registry) {
   return { step, cells, cultures: cultureStats };
 }
 
-/**
- * Run the galaxy-level population/culture simulation (VISION.md §5,
- * POPULATION_PLAN.md). Pure function of (seed, opts) — same inputs always
- * produce byte-identical output, which is what makes step-forward/back and
- * reload-through-seed work. All randomness derives from `seed` via
- * childSeed()/coordSeed() — nothing reads Math.random or Date.now.
- *
- * @param {string} seed - the galaxy seed
- * @param {{radius?: number, steps?: number, sectorSize?: number}} [opts]
- * @returns {{seed, radius, sectorSize, steps, history: Array, cultures: Object}}
- */
-export function generatePopulation(seed, opts = {}) {
+// Genesis (step 0) only — the shared setup every run needs regardless of how
+// far it's eventually stepped. Split out from generatePopulation so a caller
+// can hold onto this live, mutable state and extend it later (advancePopulation)
+// instead of re-running everything from scratch every time the user wants to
+// see one more generation (§16's determinism/replay guarantees still hold: every
+// step's RNG derives from `popSeed` + the ABSOLUTE step number, never from how
+// many steps were already computed, so extending incrementally produces
+// byte-identical results to computing the same target step in one shot).
+//
+// @param {string} seed - the galaxy seed
+// @param {{radius?: number, sectorSize?: number}} [opts]
+export function initPopulation(seed, opts = {}) {
   const radius = opts.radius ?? DEFAULT_RADIUS;
-  const steps = opts.steps ?? DEFAULT_STEPS;
   const sectorSize = opts.sectorSize ?? 1000;
 
   const popSeed = childSeed(seed, 'pop');
@@ -310,24 +309,58 @@ export function generatePopulation(seed, opts = {}) {
   foundCultures(0, grid, validKeys, validKeySet, registry, genesisRng, GENESIS_FOUNDING);
   history.push(buildSnapshot(0, grid, registry));
 
-  for (let step = 1; step <= steps; step++) {
-    applyLifeStep(grid, validCells, registry);
+  return { seed, popSeed, radius, sectorSize, validCells, validKeys, validKeySet, registry, grid, history, step: 0 };
+}
 
-    const techRng = new PRNG(childSeed(popSeed, 'tech', step));
-    const successorRng = new PRNG(childSeed(popSeed, 'successor', step));
-    applyTechAndExtinction(step, grid, registry, techRng, successorRng);
+/** Run `state` forward (in place) from its current step up to `toStep`. No-op if already there or beyond. */
+export function advancePopulation(state, toStep) {
+  for (let step = state.step + 1; step <= toStep; step++) {
+    applyLifeStep(state.grid, state.validCells, state.registry);
 
-    const schismRng = new PRNG(childSeed(popSeed, 'schism', step));
-    applySchisms(step, grid, registry, schismRng);
+    const techRng = new PRNG(childSeed(state.popSeed, 'tech', step));
+    const successorRng = new PRNG(childSeed(state.popSeed, 'successor', step));
+    applyTechAndExtinction(step, state.grid, state.registry, techRng, successorRng);
 
-    const foundRng = new PRNG(childSeed(popSeed, 'found', step));
+    const schismRng = new PRNG(childSeed(state.popSeed, 'schism', step));
+    applySchisms(step, state.grid, state.registry, schismRng);
+
+    const foundRng = new PRNG(childSeed(state.popSeed, 'found', step));
     const refillCount = foundRng.d(6) + 3;
-    foundCultures(step, grid, validKeys, validKeySet, registry, foundRng, refillCount);
+    foundCultures(step, state.grid, state.validKeys, state.validKeySet, state.registry, foundRng, refillCount);
 
-    history.push(buildSnapshot(step, grid, registry));
+    state.history.push(buildSnapshot(step, state.grid, state.registry));
   }
+  state.step = Math.max(state.step, toStep);
+  return state;
+}
 
-  return { seed, radius, sectorSize, steps, history, cultures: registry.toPlainObject() };
+/** The plain, structuredClone-safe shape every consumer (renderers, context.js) actually reads. */
+export function populationView(state) {
+  return {
+    seed: state.seed, radius: state.radius, sectorSize: state.sectorSize,
+    steps: state.step, history: state.history, cultures: state.registry.toPlainObject()
+  };
+}
+
+/**
+ * Run the galaxy-level population/culture simulation (VISION.md §5,
+ * POPULATION_PLAN.md) in one shot. Pure function of (seed, opts) — same inputs
+ * always produce byte-identical output, which is what makes step-forward/back
+ * and reload-through-seed work. All randomness derives from `seed` via
+ * childSeed()/coordSeed() — nothing reads Math.random or Date.now. A caller
+ * that wants to step PAST `opts.steps` later (uncapped scrubbing) should use
+ * initPopulation()/advancePopulation() directly instead, to avoid recomputing
+ * from scratch on every step — see rogue.js's `_stepPopulation`.
+ *
+ * @param {string} seed - the galaxy seed
+ * @param {{radius?: number, steps?: number, sectorSize?: number}} [opts]
+ * @returns {{seed, radius, sectorSize, steps, history: Array, cultures: Object}}
+ */
+export function generatePopulation(seed, opts = {}) {
+  const steps = opts.steps ?? DEFAULT_STEPS;
+  const state = initPopulation(seed, opts);
+  advancePopulation(state, steps);
+  return populationView(state);
 }
 
 /** O(1)-lookup index from a snapshot, for renderers/generators keyed by (gx,gy). */

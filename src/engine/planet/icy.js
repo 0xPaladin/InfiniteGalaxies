@@ -2,7 +2,7 @@ import { buildSurfaceCells, makeSurface } from './common.js';
 
 // Ice sheets, fracture/chaos terrain, cryo-plains. Low overall relief with sharp
 // fracture ridges; "moisture" here means ice coverage, not liquid water.
-const PALETTE = {
+export const PALETTE = {
   ice_sheet: { glyph: '*', fg: '#dff2ff', bg: '#000000' },
   cryo_plain: { glyph: '.', fg: '#a7d6e8', bg: '#000000' },
   fracture: { glyph: '≡', fg: '#6fb3d2', bg: '#000000' },
@@ -26,6 +26,8 @@ function biome(elev, moisture) {
   if (elev > 25) return 'fracture';
   return moisture > 80 ? 'ice_sheet' : 'cryo_plain';
 }
+
+export const PROFILE = { elevation, moisture, temperature, biome };
 
 export function generateIcy(seed, planet, opts = {}) {
   const cells = buildSurfaceCells(seed, opts, { elevation, moisture, temperature, biome });

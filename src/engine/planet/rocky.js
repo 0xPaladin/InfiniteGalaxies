@@ -2,7 +2,7 @@ import { buildSurfaceCells, makeSurface } from './common.js';
 
 // Cratered, dry, moderate-relief rocky worlds — the "default" non-habitable rocky
 // profile (not icy, not volcanic-hostile, not featureless barren).
-const PALETTE = {
+export const PALETTE = {
   plains: { glyph: '.', fg: '#a89968', bg: '#000000' },
   hills: { glyph: '^', fg: '#8a7048', bg: '#000000' },
   mountain: { glyph: '▲', fg: '#c9c9c9', bg: '#000000' },
@@ -27,6 +27,12 @@ function biome(elev) {
   if (elev < 25) return 'crater';
   return 'plains';
 }
+
+// Region generation (region.js) reuses this directly — an AFMG-templated local
+// heightmap gives `elev`, and this type's own (lat,elev)-calibrated moisture/
+// temperature/biome functions turn that into a coherent local surface, instead
+// of trusting AFMG's Earth-biome classifier (wrong model for a non-habitable world).
+export const PROFILE = { elevation, moisture, temperature, biome };
 
 export function generateRocky(seed, planet, opts = {}) {
   const cells = buildSurfaceCells(seed, opts, { elevation, moisture, temperature, biome });

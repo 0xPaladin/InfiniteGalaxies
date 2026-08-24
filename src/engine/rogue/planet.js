@@ -1,4 +1,5 @@
-import { project, radialBounds, TileIndex } from './view.js';
+import * as d3 from 'd3';
+import { geoVoronoi } from 'd3-geo-voronoi';
 
 // ── color helpers (renderer-local derived data — §0: computed here, not stored
 // on the generated object) ──────────────────────────────────────────────────
@@ -39,122 +40,150 @@ const OVERLAY_RAMPS = {
   temperature: ['#2255ff', '#88ccff', '#ffcc55', '#ff3311'],
   moisture: ['#7a5a2a', '#8ac93a', '#2288dd']
 };
+const RANGE_KEY_BY_OVERLAY = { elevation: 'elev', temperature: 'temp', moisture: 'moisture' };
+
+function cellColor(cell, surface, overlay, ranges) {
+  if (overlay === 'biome' || !cell) {
+    const def = cell && surface.palette[cell.biome];
+    return def ? def.fg : '#333333';
+  }
+  const rangeKey = RANGE_KEY_BY_OVERLAY[overlay];
+  return ramp(cell[rangeKey], ranges[overlay][0], ranges[overlay][1], OVERLAY_RAMPS[overlay]);
+}
+
+function buildProjection(rotateLon, size) {
+  return d3.geoOrthographic()
+    .rotate([-rotateLon, 0])
+    .clipAngle(90)
+    .fitSize([size, size], { type: 'Sphere' });
+}
+
+// One hemisphere: a filled Voronoi mesh over the planet's surface cells,
+// projected orthographically and clipped at the horizon by d3.geoPath — cell
+// color only, no glyphs (VISION.md's roguelike feel comes from the surrounding
+// chrome/palette, not from drawing characters onto the globe here).
+function renderHemisphere(svg, cx, cy, size, surface, voronoi, rotateLon, overlay, ranges, onCellClick) {
+  const projection = buildProjection(rotateLon, size);
+  const path = d3.geoPath(projection);
+  const g = svg.append('g').attr('transform', `translate(${cx},${cy})`);
+
+  g.append('path')
+    .attr('d', path({ type: 'Sphere' }))
+    .attr('fill', '#04070d')
+    .attr('stroke', '#345')
+    .attr('stroke-width', 1);
+
+  g.selectAll('path.region-cell')
+    .data(voronoi.polygons().features)
+    .join('path')
+    .attr('class', 'region-cell')
+    .attr('d', path)
+    .attr('fill', d => cellColor(surface.cells[d.properties.index], surface, overlay, ranges))
+    .on('click', (event, d) => onCellClick(d.properties.index));
+
+  return g;
+}
 
 /**
- * Render a habitable/in-house planet surface (point-cloud cells) as ASCII.
- * Pure renderer per IMPLEMENTATION_PLAN.md §0: reads `surface`, draws, returns
- * hit-test data — never mutates `surface`.
- *
- * @param {import('../planet/types.js').PlanetSurface} surface
- * @param {ROT.Display} display
- * @param {{overlay?: 'biome'|'elevation'|'temperature'|'moisture'|'regions'}} [opts]
- * @returns {{index: TileIndex}}
+ * Render a solid planet surface as two side-by-side orthographic hemispheres
+ * (near side / far side, POPULATION_PLAN.md request) — tile color only, no
+ * glyphs. Pure renderer per IMPLEMENTATION_PLAN.md §0: reads `surface`, draws
+ * into `container`, and drives clicks through `opts.onCellClick` directly
+ * (d3's native per-element event binding, rather than the ROT-renderer TileIndex
+ * hit-test pattern the ASCII levels use — appropriate here since d3 owns the
+ * DOM elements being clicked).
  */
-function renderSurface(surface, display, opts = {}) {
+function renderSurface(surface, container, opts) {
   const overlay = opts.overlay || 'biome';
-  const { width, height } = display._options;
-  const srcBounds = surface.bounds;
+  const hostW = container.clientWidth || 900;
+  const hostH = container.clientHeight || 560;
+  const size = Math.max(240, Math.min(hostW / 2 - 30, hostH - 30));
+  const gap = 24;
+  const totalW = size * 2 + gap;
+  const totalH = size + 20;
 
-  const index = project(surface.cells, {
-    getPos: c => ({ x: c.x, y: c.y }),
-    srcBounds,
-    width,
-    height
-  });
+  const svg = d3.select(container).append('svg')
+    .attr('width', totalW).attr('height', totalH)
+    .attr('viewBox', `0 0 ${totalW} ${totalH}`)
+    .style('max-width', '100%').style('max-height', '100%');
 
   const ranges = {
     elevation: cellRange(surface.cells, 'elev'),
     temperature: cellRange(surface.cells, 'temp'),
     moisture: cellRange(surface.cells, 'moisture')
   };
-  const rangeKeyByOverlay = { elevation: 'elev', temperature: 'temp', moisture: 'moisture' };
 
-  for (let x = 0; x < width; x++) {
-    for (let y = 0; y < height; y++) {
-      const items = index.at(x, y);
-      if (!items.length) continue;
+  const points = surface.cells.map((c, i) => ({
+    type: 'Feature',
+    properties: { index: i },
+    geometry: { type: 'Point', coordinates: [c.x, c.y] }
+  }));
+  const voronoi = geoVoronoi(points);
+  const onCellClick = opts.onCellClick || (() => {});
 
-      // Highest elevation wins when multiple cells land in one terminal cell.
-      const cell = items.reduce((a, b) => (b.elev > a.elev ? b : a));
-      const def = surface.palette[cell.biome];
-      const glyph = def ? def.glyph : '?';
+  renderHemisphere(svg, 0, 0, size, surface, voronoi, 0, overlay, ranges, onCellClick);
+  svg.append('text').attr('class', 'hemisphere-label').attr('x', size / 2).attr('y', size + 16).text('0° meridian');
 
-      let fg;
-      if (overlay === 'biome' || overlay === 'regions') {
-        fg = def ? def.fg : '#888888';
-      } else {
-        const rangeKey = rangeKeyByOverlay[overlay];
-        fg = ramp(cell[rangeKey], ranges[overlay][0], ranges[overlay][1], OVERLAY_RAMPS[overlay]);
-      }
+  renderHemisphere(svg, size + gap, 0, size, surface, voronoi, 180, overlay, ranges, onCellClick);
+  svg.append('text').attr('class', 'hemisphere-label').attr('x', size + gap + size / 2).attr('y', size + 16).text('180° meridian');
 
-      display.draw(x, y, glyph, fg);
-    }
-  }
-
-  return { index };
+  return {};
 }
 
-/**
- * Render a gas giant: horizontal color bands (no surface cells — a gas giant has
- * no terrain to walk) plus, if it has moons, their orbital positions overlaid so
- * the player can navigate to one (VISION.md §4.3 note: gas giants offer moons
- * instead of a surface to descend into).
- *
- * @param {Object} planet - the generatePlanet() output (for `.color`/`.moons`;
- *   `surface` itself carries no cells/moons for gas giants, see planet/types.js)
- */
-function renderGasGiant(planet, display) {
-  const side = 40;
-  display.setOptions({ width: side, height: side, fontSize: 16 });
+// A gas giant has no surface cells (VISION.md §4.3: moons stand in for terrain
+// to descend into) — horizontal color bands plus its moons as clickable dots,
+// same information as the old ASCII renderer, drawn with the same technology
+// as the surface view above so the planet level is consistently d3-driven.
+function renderGasGiant(planet, container, opts) {
+  const size = Math.max(240, Math.min(container.clientWidth || 480, container.clientHeight || 480));
+  const svg = d3.select(container).append('svg')
+    .attr('width', size).attr('height', size)
+    .attr('viewBox', `0 0 ${size} ${size}`)
+    .style('max-width', '100%').style('max-height', '100%');
 
   const colors = Array.isArray(planet.color) ? planet.color : [planet.color, planet.color];
-  for (let y = 0; y < side; y++) {
-    const band = Math.floor(y / 3) % colors.length;
-    for (let x = 0; x < side; x++) {
-      display.draw(x, y, '▒', colors[band]);
-    }
+  const bands = 24;
+  const bandH = size / bands;
+  for (let i = 0; i < bands; i++) {
+    svg.append('rect')
+      .attr('x', 0).attr('y', i * bandH).attr('width', size).attr('height', bandH + 1)
+      .attr('fill', colors[i % colors.length]);
   }
 
-  const index = new TileIndex();
   const moons = planet.moons || [];
   if (moons.length) {
     const maxAu = Math.max(1, ...moons.map(m => m.pos.au));
-    const srcBounds = radialBounds(maxAu * 1.15);
-    const moonIndex = project(moons, {
-      getPos: m => ({ x: m.pos.x, y: m.pos.y }),
-      srcBounds,
-      width: side,
-      height: side
-    });
+    const scale = (size / 2 * 0.85) / (maxAu * 1.15);
+    const cx = size / 2, cy = size / 2;
+    const onMoonClick = opts.onMoonClick || (() => {});
 
-    for (let x = 0; x < side; x++) {
-      for (let y = 0; y < side; y++) {
-        const items = moonIndex.at(x, y);
-        if (!items.length) continue;
-        const moon = items[0];
-        display.draw(x, y, '○', moon.HI === 1 ? '#228B22' : moon.HI === 2 ? '#1E90FF' : '#cccccc');
-        items.forEach(m => index.add(x, y, m));
-      }
-    }
+    svg.selectAll('circle.moon')
+      .data(moons)
+      .join('circle')
+      .attr('class', 'region-cell')
+      .attr('cx', m => cx + m.pos.x * scale)
+      .attr('cy', m => cy + m.pos.y * scale)
+      .attr('r', 5)
+      .attr('fill', m => (m.HI === 1 ? '#228B22' : m.HI === 2 ? '#1E90FF' : '#cccccc'))
+      .on('click', (event, m) => onMoonClick(m));
   }
 
-  return { index };
+  return {};
 }
 
 /**
  * Top-level planet-view renderer — dispatches on surface.type. Pure per §0.
+ * `container` is a plain DOM element (this level renders via d3/SVG, not
+ * ROT.Display — see rogue.js's level-switch), cleared and redrawn each call.
  *
  * @param {Object} planet - generatePlanet()/generateMoon() output
  * @param {import('../planet/types.js').PlanetSurface} surface - generateSurface(planet) output
- * @param {ROT.Display} display
- * @param {{overlay?: string}} [opts]
- * @returns {{index: TileIndex}}
+ * @param {HTMLElement} container
+ * @param {{overlay?: string, onCellClick?: (cellIndex:number)=>void, onMoonClick?: (moon:Object)=>void}} [opts]
  */
-export function RoguePlanet(planet, surface, display, opts = {}) {
-  if (surface.type === 'gas giant') {
-    return renderGasGiant(planet, display);
-  }
-
-  display.setOptions({ width: 120, height: 60, fontSize: 8 });
-  return renderSurface(surface, display, opts);
+export function RoguePlanet(planet, surface, container, opts = {}) {
+  container.innerHTML = '';
+  return surface.type === 'gas giant'
+    ? renderGasGiant(planet, container, opts)
+    : renderSurface(surface, container, opts);
 }

@@ -51,7 +51,10 @@ function toGrid(x, y, bounds, width, height) {
  * @returns {{index: import('./view.js').TileIndex}}
  */
 export function RogueRegion(region, display) {
-  display.setOptions({ width: 100, height: 60, fontSize: 8 });
+  // A region is one square (AFMG local-km) surface cell now — the display grid
+  // matches that 1:1 (equal width/height cell counts; `forceSquareRatio: true`
+  // on the shared ROT.Display, set at app init, keeps it visually square too).
+  display.setOptions({ width: 90, height: 90, fontSize: 8 });
   const { width, height } = display._options;
   const { bounds } = region;
 

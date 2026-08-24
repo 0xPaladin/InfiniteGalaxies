@@ -62,6 +62,35 @@
       min-height: 0;
     }
 
+    /* d3 planet view (rogue/planet.js) — sits over the same area as #display,
+       toggled visible only at the 'planet' navigation level (src/rogue.js). */
+    #planetDisplay {
+      flex: 1;
+      display: none;
+      justify-content: center;
+      align-items: center;
+      min-height: 0;
+      gap: 24px;
+    }
+
+    #planetDisplay svg .region-cell {
+      cursor: pointer;
+      stroke: #000;
+      stroke-width: 0.3;
+    }
+
+    #planetDisplay svg .region-cell:hover {
+      stroke: #fff;
+      stroke-width: 1;
+    }
+
+    #planetDisplay .hemisphere-label {
+      fill: #aac;
+      font-family: monospace;
+      font-size: 11px;
+      text-anchor: middle;
+    }
+
     #info {
       width: 320px;
       padding: 16px;
@@ -111,6 +140,7 @@
     <div id="rogueMain">
       <div id="breadcrumb">GALAXY</div>
       <div id="display"></div>
+      <div id="planetDisplay"></div>
     </div>
   </div>
   <div id="toastContainer"></div>

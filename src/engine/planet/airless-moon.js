@@ -5,7 +5,7 @@ import { buildSurfaceCells, makeSurface } from './common.js';
 // are extreme (no atmosphere to redistribute heat day/night — this is a static
 // surface classification, not a day/night simulation, so we just widen the range
 // relative to rocky.js's gentler curve).
-const PALETTE = {
+export const PALETTE = {
   highland: { glyph: '^', fg: '#bbbbbb', bg: '#000000' },
   crater: { glyph: '○', fg: '#888888', bg: '#000000' },
   mare: { glyph: ',', fg: '#555555', bg: '#000000' }
@@ -27,6 +27,8 @@ function biome(elev) {
   if (elev < 20) return 'mare';
   return 'crater';
 }
+
+export const PROFILE = { elevation, moisture, temperature, biome };
 
 export function generateAirlessMoon(seed, planet, opts = {}) {
   const cells = buildSurfaceCells(seed, opts, { elevation, moisture, temperature, biome });

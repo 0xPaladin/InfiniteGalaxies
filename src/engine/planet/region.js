@@ -1,90 +1,17 @@
 import { PRNG } from '../random.js';
 import { childSeed, coordSeed } from '../seed.js';
 import { makeNoise2D, fbm } from './noise.js';
+import { findNeighbors, selectTemplate } from './region-templates.js';
+import { PROFILES } from './profiles.js';
 
-// A planet's surface (lon/lat -180..180 / -90..90, or an AFMG region's own km
-// box) is subdivided into an RxC grid of addressable regions — same idea as
-// galaxy sectors, one level down. Regions are coordinates (rx,ry) into this
-// grid, not physical positions.
-export const REGION_COLS = 12;
-export const REGION_ROWS = 6;
-
-/** Which (rx,ry) region a surface-space point (x,y) falls into. */
-export function regionCoordsFor(surfaceBounds, x, y) {
-  const { minX, maxX, minY, maxY } = surfaceBounds;
-  const colW = (maxX - minX) / REGION_COLS;
-  const rowH = (maxY - minY) / REGION_ROWS;
-  return {
-    rx: Math.min(REGION_COLS - 1, Math.max(0, Math.floor((x - minX) / colW))),
-    ry: Math.min(REGION_ROWS - 1, Math.max(0, Math.floor((y - minY) / rowH)))
-  };
-}
-
-function boundsFor(surfaceBounds, rx, ry) {
-  const { minX, maxX, minY, maxY } = surfaceBounds;
-  const colW = (maxX - minX) / REGION_COLS;
-  const rowH = (maxY - minY) / REGION_ROWS;
-  return {
-    minX: minX + rx * colW, maxX: minX + (rx + 1) * colW,
-    minY: minY + ry * rowH, maxY: minY + (ry + 1) * rowH
-  };
-}
-
-function nearestCell(cells, x, y) {
-  let best = null, bestD = Infinity;
-  for (const c of cells) {
+/** Nearest surface cell's INDEX to a clicked surface-space point (x,y) — the region for that click. */
+export function regionCellIndexFor(surface, x, y) {
+  let bestI = -1, bestD = Infinity;
+  surface.cells.forEach((c, i) => {
     const d = (c.x - x) * (c.x - x) + (c.y - y) * (c.y - y);
-    if (d < bestD) { bestD = d; best = c; }
-  }
-  return best;
-}
-
-// In-house terrain refinement: sub-sample the parent surface's nearest cell(s)
-// (nearest-neighbor by (x,y) — surface.cells is a point cloud, not an array
-// index, see IMPLEMENTATION_PLAN.md §6.1) and layer local detail noise on top.
-// Elevation/moisture wobble locally; biome is inherited, not reinvented — a
-// mountain region can't render as ocean.
-function buildRefinedCells(seed, bounds, parentCells, cols = 40, rows = 20) {
-  const rng = new PRNG(childSeed(seed, 'jitter'));
-  const elevNoise = makeNoise2D(childSeed(seed, 'detail-elev'));
-  const moistNoise = makeNoise2D(childSeed(seed, 'detail-moisture'));
-  const colW = (bounds.maxX - bounds.minX) / cols;
-  const rowH = (bounds.maxY - bounds.minY) / rows;
-
-  const cells = [];
-  for (let row = 0; row < rows; row++) {
-    for (let col = 0; col < cols; col++) {
-      const jitterX = (rng.rand() - 0.5) * colW;
-      const jitterY = (rng.rand() - 0.5) * rowH;
-      const x = bounds.minX + (col + 0.5) * colW + jitterX;
-      const y = bounds.minY + (row + 0.5) * rowH + jitterY;
-
-      const anchor = nearestCell(parentCells, x, y) || { elev: 0, temp: 0, moisture: 0, biome: 'plains' };
-      const elevDetail = fbm(elevNoise, col / cols * 8, row / rows * 8, 3, 0.5, 1);
-      const moistDetail = fbm(moistNoise, col / cols * 8 + 50, row / rows * 8 + 50, 3, 0.5, 1);
-
-      cells.push({
-        x: +x.toFixed(3),
-        y: +y.toFixed(3),
-        elev: +(anchor.elev + (elevDetail - 0.5) * 20).toFixed(1),
-        moisture: +Math.max(0, (anchor.moisture || 0) + (moistDetail - 0.5) * 20).toFixed(1),
-        temp: anchor.temp,
-        biome: anchor.biome
-      });
-    }
-  }
-  return cells;
-}
-
-// Cheap, illustrative local features for the in-house path (AFMGData's own
-// region mode supplies real rivers/coastlines instead — see afmg-adapter.js).
-function deriveFeatures(cells) {
-  if (!cells.length) return [];
-  const peak = cells.reduce((a, b) => (b.elev > a.elev ? b : a));
-  const wettest = cells.reduce((a, b) => ((b.moisture || 0) > (a.moisture || 0) ? b : a));
-  const features = [{ kind: 'peak', x: peak.x, y: peak.y, elev: peak.elev }];
-  if (wettest.moisture > 40) features.push({ kind: 'water', x: wettest.x, y: wettest.y, moisture: wettest.moisture });
-  return features;
+    if (d < bestD) { bestD = d; bestI = i; }
+  });
+  return bestI;
 }
 
 const SITE_KINDS = ['settlement', 'outpost', 'ruin', 'marker'];
@@ -112,37 +39,52 @@ function pickSites(seed, cells, opts = {}) {
   }));
 }
 
+function pickLocalCell(cells, rng, idealElev = 40) {
+  if (!cells.length) return null;
+  let best = null, bestScore = -Infinity;
+  for (const c of cells) {
+    const score = -Math.abs(c.elev - idealElev) + rng.range(-8, 8);
+    if (score > bestScore) { bestScore = score; best = c; }
+  }
+  return best;
+}
+
 // POPULATION_PLAN.md §14.2: real sites are placement/habitation.js's output —
 // actual settlements/outposts/stations placed by a culture's bioform, TL, and
 // development, not invented from terrain alone. `habitats` is the planet's
-// FULL habitat list (from generatePlanetHabitation, unfiltered); this picks
-// out only the ones whose surface position falls inside this region.
-function sitesFromHabitats(habitats, lonLatBounds) {
-  return habitats
-    .filter(h => h.pos && h.pos.x >= lonLatBounds.minX && h.pos.x < lonLatBounds.maxX &&
-                 h.pos.y >= lonLatBounds.minY && h.pos.y < lonLatBounds.maxY)
-    .map(h => ({
-      kind: h.type, x: h.pos.x, y: h.pos.y,
+// FULL habitat list (from generatePlanetHabitation, unfiltered); a habitat
+// belongs to THIS region if its `pos` is that literal parent surface cell
+// (habitation.js's pickSiteCell copies a surface cell's x/y verbatim, so exact
+// match — not a bounds test — is the correct test now that a region IS one cell).
+// Matched habitats are then sited on a plausible LOCAL cell within the
+// region's own newly-generated terrain (not literally "at" the parent cell's
+// lon/lat, which has no meaning in the region's local km coordinate space).
+function sitesFromHabitats(habitats, parentCell, localCells, seed) {
+  const matched = habitats.filter(h => h.pos &&
+    Math.abs(h.pos.x - parentCell.x) < 1e-6 && Math.abs(h.pos.y - parentCell.y) < 1e-6);
+  if (!matched.length) return [];
+
+  const rng = new PRNG(childSeed(seed, 'site-placement'));
+  return matched.map((h, i) => {
+    const local = pickLocalCell(localCells, new PRNG(childSeed(seed, 'site-placement', i)));
+    return {
+      kind: h.type, x: local ? local.x : 0, y: local ? local.y : 0,
       population: h.population, cultureId: h.cultureId, bioform: h.bioform, megastructure: h.megastructure
-    }));
+    };
+  });
 }
 
 // A region with no live habitat can still hold a ruin — flavored by a former
 // claimant's bioform/TL/extinctionCause (§13.1), not invented from nothing.
 // Not every such region shows one (0.3 chance) — a dead culture's whole former
 // territory being wall-to-wall ruins would read as noise, not history.
-function ruinSiteFromFormerClaims(seed, cells, ctx) {
-  if (!ctx || !ctx.formerClaims || !ctx.formerClaims.length || !cells.length) return [];
+function ruinSiteFromLocalCells(seed, localCells, ctx) {
+  if (!ctx || !ctx.formerClaims || !ctx.formerClaims.length || !localCells.length) return [];
   const rng = new PRNG(childSeed(seed, 'ruins'));
   if (!rng.p(0.3)) return [];
 
   const claim = rng.pick(ctx.formerClaims);
-  const idealElev = 40;
-  let best = null, bestScore = -Infinity;
-  for (const c of cells) {
-    const score = -Math.abs(c.elev - idealElev) + rng.range(-8, 8);
-    if (score > bestScore) { bestScore = score; best = c; }
-  }
+  const best = pickLocalCell(localCells, rng);
   if (!best) return [];
 
   return [{
@@ -153,60 +95,85 @@ function ruinSiteFromFormerClaims(seed, cells, ctx) {
 
 // Real sites if habitation data was wired in (even an empty array counts —
 // "no habitats landed here" still means don't invent placeholder ones); a
-// possible ruin if this region falls in formerly-claimed territory; the old
-// invented heuristic ONLY as a last resort when no ctx/habitats exist at all
-// (a caller that hasn't wired the population layer yet — e.g. a standalone
-// test — still gets a renderable region instead of an empty one).
-function resolveSites(regionSeed, cells, lonLatBounds, opts) {
+// possible ruin if this region's parent cell falls in formerly-claimed
+// territory; the old invented heuristic ONLY as a last resort when no
+// ctx/habitats exist at all (a caller that hasn't wired the population layer
+// yet — e.g. a standalone test — still gets a renderable region, not an empty one).
+function resolveSites(regionSeed, parentCell, localCells, opts) {
   if (opts.habitats != null) {
-    const real = sitesFromHabitats(opts.habitats, lonLatBounds);
-    return real.length ? real : ruinSiteFromFormerClaims(regionSeed, cells, opts.ctx);
+    const real = sitesFromHabitats(opts.habitats, parentCell, localCells, regionSeed);
+    return real.length ? real : ruinSiteFromLocalCells(regionSeed, localCells, opts.ctx);
   }
-  return pickSites(regionSeed, cells, opts);
+  return pickSites(regionSeed, localCells, opts);
+}
+
+// A fresh small local noise field for moisture ONLY (0..1 raw, the exact input
+// shape every in-house PROFILE.moisture() expects) — elevation comes from
+// AFMG's templated heightmap instead (see generateRegion below), but AFMG's
+// own precipitation field is on a different, incompatible scale, so moisture
+// stays independently seeded local noise like the old refinement path did.
+function localMoistureRaw(noise, x, y) {
+  return fbm(noise, x / 20 + 50, y / 20 + 50, 3, 0.5, 1.3);
 }
 
 /**
- * Generate one region of a planet surface. Async — the habitable/AFMG branch
- * genuinely awaits (its own richer region-mode terrain sim), the in-house
- * branch resolves immediately through the same function (IMPLEMENTATION_PLAN.md
- * §4.2's async convention). Pure function of `surface` + coords + opts — no
- * live reference to the parent planet object (§0).
+ * Generate one region — a single planet surface cell's worth of local detail
+ * (POPULATION_PLAN.md: "each planet cell is a region," square bounds, ~100km²
+ * by default). Async — genuinely awaits AFMGData's region-mode terrain sim,
+ * used for EVERY planet type now, not just habitable ones (see afmg-adapter.js's
+ * generateTemplatedRegion for why). Pure function of `surface` + `cellIndex` +
+ * `opts` — no live reference to the parent planet object (§0).
  *
  * @param {import('./types.js').PlanetSurface} surface
- * @param {number} rx
- * @param {number} ry
- * @param {{siteCount?: number, habitats?: Array, ctx?: Object}} [opts] -
+ * @param {number} cellIndex - index into surface.cells
+ * @param {{sizeKm?: number, cells?: number, habitats?: Array, ctx?: Object}} [opts] -
  *   `habitats` is the planet's full habitat list (population/habitation.js);
  *   `ctx` is that planet's CultureContext (population/context.js), used for
  *   ruin flavor when no habitat lands in this specific region.
  */
-export async function generateRegion(surface, rx, ry, opts = {}) {
-  const regionSeed = coordSeed(surface.seed, 'region', rx, ry);
-  // Habitat positions are always in the PARENT SURFACE's lon/lat space (even for
-  // habitable worlds, whose region terrain below uses AFMG's own local km grid) —
-  // so site filtering always uses this, never the region's own rendering bounds.
-  const lonLatBounds = boundsFor(surface.bounds, rx, ry);
+export async function generateRegion(surface, cellIndex, opts = {}) {
+  const parentCell = surface.cells[cellIndex];
+  const regionSeed = coordSeed(surface.seed, 'region-cell', cellIndex);
 
-  if (surface.type === 'habitable') {
-    const { generateHabitableRegion } = await import('./afmg-adapter.js');
-    const afmgRegion = await generateHabitableRegion(regionSeed, opts);
-    return {
-      seed: regionSeed, rx, ry,
-      bounds: afmgRegion.bounds,
-      cells: afmgRegion.cells,
-      features: afmgRegion.features,
-      sites: resolveSites(regionSeed, afmgRegion.cells, lonLatBounds, opts),
-      palette: afmgRegion.palette
-    };
+  const neighbors = findNeighbors(surface.cells, cellIndex, 8);
+  const templateRng = new PRNG(childSeed(regionSeed, 'template'));
+  const template = selectTemplate(parentCell, neighbors, parentCell.y, templateRng);
+
+  const { generateTemplatedRegion } = await import('./afmg-adapter.js');
+  const afmgRegion = await generateTemplatedRegion(regionSeed, {
+    sizeKm: opts.sizeKm ?? 100,
+    cells: opts.cells ?? 2500,
+    template
+  });
+
+  let cells = afmgRegion.cells;
+  let palette = afmgRegion.palette;
+
+  const profile = PROFILES[surface.type];
+  if (profile) {
+    // Non-habitable types: keep AFMG's geologically-plausible elevation SHAPE,
+    // but re-derive moisture/biome through this planet type's OWN calibrated
+    // logic instead of AFMG's Earth-biome classifier (see profiles.js).
+    const moistureNoise = makeNoise2D(childSeed(regionSeed, 'detail-moisture'));
+    cells = afmgRegion.cells.map(c => {
+      const raw = localMoistureRaw(moistureNoise, c.x, c.y);
+      const moisture = profile.moisture(raw, c.elev);
+      const temp = profile.temperature(parentCell.y, c.elev);
+      return { x: c.x, y: c.y, elev: c.elev, moisture, temp, biome: profile.biome(c.elev, moisture, temp) };
+    });
+    palette = surface.palette;
   }
 
-  const cells = buildRefinedCells(regionSeed, lonLatBounds, surface.cells);
   return {
-    seed: regionSeed, rx, ry,
-    bounds: lonLatBounds,
+    seed: regionSeed,
+    cellIndex,
+    lon: parentCell.x,
+    lat: parentCell.y,
+    template,
+    bounds: afmgRegion.bounds,
     cells,
-    features: deriveFeatures(cells),
-    sites: resolveSites(regionSeed, cells, lonLatBounds, opts),
-    palette: surface.palette
+    features: afmgRegion.features,
+    sites: resolveSites(regionSeed, parentCell, cells, opts),
+    palette
   };
 }
