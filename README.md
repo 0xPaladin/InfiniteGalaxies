@@ -82,9 +82,12 @@ dot) instead.
 | New galaxy | **New Galaxy** in the GUI panel (uses a fresh random seed) |
 | Save / Load / Delete Save | GUI panel buttons |
 
-Region displays use fixed 1km-per-tile resolution, so a small region (say, 40km side) renders at
-40×40 tiles while a large one (180km) fills 180×180 tiles, keeping fine detail legible without
-over-rendering tiny regions into a sparsely-populated grid.
+Region displays use fixed 2km-per-tile resolution, so a small region (say, 40km side) renders at
+20×20 tiles while a large one (450km) fills 225×225 tiles, keeping fine detail legible without
+over-rendering tiny regions into a sparsely-populated grid. The terrain is fully rasterized via a
+multi-source BFS fill: even though the underlying AFMG mesh is capped at 25k cells (for generation
+speed), every display tile gets painted from the nearest source cell, guaranteeing 100% coverage
+with no black areas.
 
 The right-hand **GUI panel** (via [lil-gui](https://lil-gui.georgealways.com/)) also shows live
 info for whatever you're currently looking at (star count, spectral class, planet HI rating, region
@@ -225,6 +228,23 @@ type's own calibrated profile (`profiles.js`) instead — see `region.js`'s comm
 Surface generation itself (not regions) is unchanged: habitable surfaces still route through
 AFMGData, the other five types are still generated in-house from seeded value noise.
 
+**Habitable regions now bias their biome toward the parent surface cell's actual climate:**
+without this, a region's biome came entirely from AFMG's own from-scratch regional climate
+sim, blind to what the parent cell actually was — clicking a forest surface cell could just as
+easily generate a desert region. Now the region rescales its moisture toward the parent cell's
+actual moisture (from the planet-scale simulation), then reclassifies biome via AFMG's own
+moisture × temperature matrix. The result is a region that predominantly comes out forest when
+clicked from a forest tile, while still preserving AFMG's per-cell noise-driven local variation
+(a patch of grassland inside a forest region, etc.) rather than a flat, artificial override.
+
+**Empty-shoreline lakes no longer crash the generator:** a pre-existing bug in the vendored
+AFMG code threw when a lake's shoreline array was empty (no land cell touches its boundary) —
+which is now common on per-cell custom heightmaps that regularly produce small land patches
+entirely surrounded by ocean. The crash occurred inside `Lakes.defineClimateData()`, called
+from `Rivers.generate()`, matching the "error at rivers" symptom. Fixed: an empty shoreline
+now correctly means "no land path to an outlet", so the lake is treated as closed instead of
+crashing the whole region generation.
+
 #### Region heightmap generation (`cell-terrain.js`)
 
 Each region's elevation is built in two layers: a coarse "ramp" from the surface cell's own
@@ -249,11 +269,11 @@ compression.
 #### Dynamic surface cell count
 
 Habitable worlds and in-house rocky/icy/hostile/barren/airless-moon planets now compute their
-surface cell count dynamically from their actual radius, targeting ~180km-per-region-side
-(guaranteeing <200km under real-world spacing, leaving margin). Small bodies (1000km radius)
-get ~300–400 cells; large ones (15000km) can reach ~87k cells. This trades surface-generation
+surface cell count dynamically from their actual radius, targeting ~450km-per-region-side
+(guaranteeing <500km under real-world spacing, leaving margin). Small bodies (1000km radius)
+get ~300–400 cells; large ones (15000km) can reach ~14k cells. This trades surface-generation
 CPU time for honest region sizing across the full body-size range, since every region reads
-its own neighborhood, not a one-size-fits-all template — on a tiny moon, 87k would be absurd,
+its own neighborhood, not a one-size-fits-all template — on a tiny moon, 14k would be absurd,
 but so would claiming a 100km-side region covers a 2000km-radius body.
 
 ### Population / culture simulation (`src/engine/population/`)
