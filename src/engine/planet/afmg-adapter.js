@@ -28,18 +28,27 @@ function biomeGlyph(name) {
 // AFMGData's pack.cells is parallel typed arrays over an irregular Voronoi point
 // cloud, not a dense grid — see docs/afmg-integration.md. Map it into our shared
 // PlanetSurface.cells shape (IMPLEMENTATION_PLAN.md §4.2) without rasterizing.
-function mapPackCells(pack) {
+//
+// temp/prec are NOT pack.cells fields — AFMG's climate sim runs on the finer
+// simulation grid (grid.cells.temp / grid.cells.prec) and pack cells only
+// carry `.g`, a reference index back into that grid (see e.g. AFMG's own
+// generators/biomes.js: `temp[gridReference[cellId]]`). Reading `pack.cells.temp`
+// directly (as this used to) always came back undefined, so every surface
+// cell's temp/moisture silently landed as `null` — this is why region.js's
+// habitable-biome bias had nothing to bias with.
+function mapPackCells(pack, grid) {
   const { cells, biomes } = pack;
   const n = cells.i.length;
   const out = new Array(n);
   for (let idx = 0; idx < n; idx++) {
     const [x, y] = cells.p[idx];
     const biomeDef = biomes[cells.biome[idx]] || { name: 'unknown' };
+    const g = cells.g[idx];
     out[idx] = {
       x, y,
       elev: cells.h[idx],
-      temp: cells.temp ? cells.temp[idx] : null,
-      moisture: cells.prec ? cells.prec[idx] : null,
+      temp: grid.cells.temp ? grid.cells.temp[g] : null,
+      moisture: grid.cells.prec ? grid.cells.prec[g] : null,
       biome: biomeDef.name
     };
   }
@@ -85,7 +94,7 @@ export async function generateHabitableSurface(seed, planet, opts = {}) {
     atmosphere: planet.atmosphere,
     meanTempC: planet.tempC,
     bounds: { minX: -180, maxX: 180, minY: -90, maxY: 90 },
-    cells: mapPackCells(map.pack),
+    cells: mapPackCells(map.pack, map.grid),
     regions: [],
     palette: mapPalette(map.pack.biomes)
   };
@@ -154,7 +163,7 @@ export async function generateCellRegion(seed, opts = {}) {
   return {
     seed,
     bounds: { minX: 0, maxX: size, minY: 0, maxY: size },
-    cells: mapPackCells(map.pack),
+    cells: mapPackCells(map.pack, map.grid),
     features: mapFeatures(map.pack),
     palette: mapPalette(map.pack.biomes)
   };
