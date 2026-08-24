@@ -6,7 +6,7 @@
 // continuous everywhere (no region-boundary seam at all for that layer).
 import { childSeed } from '../seed.js';
 import { makeNoise3D, fbm3D } from './noise.js';
-import { bearingDeg, greatCircleKm } from './sphere-geo.js';
+import { bearingDeg, greatCircleKm, TARGET_REGION_SIDE_KM } from './sphere-geo.js';
 
 const DIRS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 
@@ -62,12 +62,21 @@ export function cardinalNeighbors(cells, index, radiusKm, densityK = DENSITY_K) 
 // equal-area square side is r*sqrt(pi/k)). Robust regardless of how the
 // point cloud is laid out — unlike measuring compass-direction spacing
 // directly, which only works cleanly on an actual rectilinear grid.
+// This upper bound is a pathological-outlier backstop, NOT the real ceiling —
+// the actual <targetSideKm-per-region guarantee comes from choosing the
+// planet's cell count correctly upfront (dynamicCellCount/dynamicGridDims).
+// It just needs to sit comfortably above TARGET_REGION_SIDE_KM so it never
+// clips a legitimate (if unlucky) measurement, while still catching truly
+// degenerate cases (e.g. near-duplicate points collapsing kNearest[k-1] to
+// ~0, which would otherwise blow the formula up toward infinity).
+const SIDE_KM_SAFETY_CAP = TARGET_REGION_SIDE_KM * 2.5;
+
 export function estimateRegionSideKm(kNearest, fallbackKm) {
   if (!kNearest.length) return fallbackKm;
   const k = kNearest.length;
   const rK = kNearest[k - 1].dist;
   if (!rK) return fallbackKm;
-  return Math.max(5, Math.min(400, rK * Math.sqrt(Math.PI / k)));
+  return Math.max(5, Math.min(SIDE_KM_SAFETY_CAP, rK * Math.sqrt(Math.PI / k)));
 }
 
 function mid(center, neighbor) {

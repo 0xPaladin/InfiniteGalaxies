@@ -25,20 +25,19 @@ export function greatCircleKm(radiusKm, lon1, lat1, lon2, lat2) {
 }
 
 // Every planet's regions target the same physical ceiling (per-planet request:
-// "regions will be < 200 km x 200 km") — 180 leaves margin under that ceiling
-// since these are ESTIMATES made before the point cloud/grid actually exists.
-export const TARGET_REGION_SIDE_KM = 180;
+// "regions will be < 500 km x 500 km", raised from the earlier 200km ceiling
+// to cut the cell counts below driving real generation lag on large planets)
+// — 450 leaves margin under that ceiling since these are ESTIMATES made
+// before the point cloud/grid actually exists.
+export const TARGET_REGION_SIDE_KM = 450;
 
 // Guard rails so a tiny asteroid-moon doesn't demand a near-zero cell count.
 // Upper bound is sized for the largest radius a habitable (HI<=2) world can
 // actually roll — 15000km, from astrophysics.js's "rocky" classification
-// template, the only template HI<=2 routes through — so the <200km-per-region
-// requirement holds even at that extreme (needs ~87k cells at the 180km
-// target). That's ~10x AFMG's own historical planet-mode default (8000) for
-// the biggest habitable worlds; expect noticeably slower surface generation
-// there — untested in-browser, since this environment can't run AFMG's real
-// multi-stage sim (see the earlier note on why: no import-map support under
-// plain Node).
+// template, the only template HI<=2 routes through — so the <500km-per-region
+// requirement holds even at that extreme (needs ~14k cells at the 450km
+// target — well under AFMG's own historical planet-mode default of 20000, so
+// this shouldn't be slower than stock AFMG at any body size).
 const MIN_CELLS = 200;
 const MAX_CELLS = 100000;
 
@@ -70,7 +69,7 @@ export function dynamicCellCount(radiusKm, targetSideKm = TARGET_REGION_SIDE_KM)
 // (common.js) is far cheaper than AFMG's multi-stage plate/climate/river/biome
 // sim, so this grid can afford more cells before it's a perf concern. Sized to
 // clear the worst case (a 15000km-radius rocky world, astrophysics.js's max)
-// without clipping short of the <200km target.
+// without clipping short of the <500km target.
 const MAX_GRID_CELLS = 200000;
 
 export function dynamicGridDims(radiusKm, targetSideKm = TARGET_REGION_SIDE_KM) {

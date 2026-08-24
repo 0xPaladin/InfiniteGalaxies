@@ -73,13 +73,19 @@ function renderHemisphere(svg, cx, cy, size, surface, voronoi, rotateLon, overla
     .attr('stroke', '#345')
     .attr('stroke-width', 1);
 
+  // geoVoronoi's polygons() features are index-aligned with the input point
+  // array (surface.cells), NOT tagged with that index on d.properties — using
+  // d.properties.index there was always undefined, breaking both cell color
+  // lookup and the click handler. Attach the real index ourselves.
+  const allCells = voronoi.polygons().features.map((f, i) => Object.assign({ i }, f));
+
   g.selectAll('path.region-cell')
-    .data(voronoi.polygons().features)
+    .data(allCells)
     .join('path')
     .attr('class', 'region-cell')
     .attr('d', path)
-    .attr('fill', d => cellColor(surface.cells[d.properties.index], surface, overlay, ranges))
-    .on('click', (event, d) => onCellClick(d.properties.index));
+    .attr('fill', d => cellColor(surface.cells[d.i], surface, overlay, ranges))
+    .on('click', (event, d) => onCellClick(d.i));
 
   return g;
 }
