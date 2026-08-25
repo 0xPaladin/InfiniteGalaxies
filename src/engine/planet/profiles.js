@@ -23,3 +23,12 @@ export const PALETTES = {
   barren: BARREN_PALETTE,
   'airless-moon': AIRLESS_MOON_PALETTE
 };
+
+// Biomes that represent a body of liquid (or quasi-liquid — lava, acid) rather
+// than solid terrain: icy.js's ice_sheet, hostile.js's lava_field/acid_lowland.
+// rogue/planet.js and rogue/region.js render every other non-habitable biome
+// with elevation-binned shading (elevation-color.js) instead of a fixed
+// palette color, but these stay their own distinct fixed color regardless of
+// elevation — a "body of water" reads as a body of water, not as just another
+// elevation band, the same way habitable worlds' oceans aren't elevation-shaded.
+export const WATER_BIOMES = new Set(['ice_sheet', 'lava_field', 'acid_lowland']);

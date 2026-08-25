@@ -1,5 +1,6 @@
 import { project } from './view.js';
 import { elevationBandColor } from './elevation-color.js';
+import { WATER_BIOMES } from '../planet/profiles.js';
 
 // Non-habitable regions (rocky/icy/hostile/barren/airless-moon) render
 // elevation-binned (see elevation-color.js), same as their planet-hemisphere
@@ -8,6 +9,9 @@ import { elevationBandColor } from './elevation-color.js';
 // classifies plains/hills/mountain/etc for non-habitable types) — only the
 // COLOR changes, so the terrain still reads by shape, just colored by
 // elevation band + the planet's own hue instead of a fixed per-biome color.
+// WATER_BIOMES (ice sheets, lava fields, acid lowlands) are the exception —
+// those keep their own fixed palette color regardless of elevation, same
+// reasoning as a habitable world's oceans never being elevation-shaded.
 const NON_HABITABLE_TYPES = new Set(['rocky', 'icy', 'hostile', 'barren', 'airless-moon']);
 
 // The `settlement`/`marker` entries are the pickSites() fallback vocabulary
@@ -46,6 +50,19 @@ const FEATURE_GLYPHS = {
   continent: { glyph: 'O', fg: '#c8b878' },
   lake: { glyph: '≈', fg: '#4499dd' },
   lake_island: { glyph: 'o', fg: '#c8b878' }
+};
+
+// cell.water (planet/hydrology-local.js's D8 drainage — IMPLEMENTATION_PLAN.md
+// §11.2) drawn directly as part of the terrain, not as a separate discrete
+// feature list: at 2km/tile a stream or pond IS a terrain tile, not a single
+// point marker. Drawn after biome/elevation color, before sites, so a stream
+// reads on top of whatever ground it cuts through but a settlement still
+// wins if the two coincide (real towns are built next to water, not
+// literally under it, but a rare exact overlap shouldn't look broken).
+const WATER_GLYPHS = {
+  stream: { glyph: '·', fg: '#6fa8dc' },
+  river: { glyph: '≈', fg: '#3a7fc9' },
+  pond: { glyph: 'o', fg: '#4499dd' }
 };
 
 // A city/town's built-up footprint, in tiles (2km/tile — see KM_PER_TILE
@@ -165,8 +182,15 @@ export function RogueRegion(region, display) {
     for (let y = 0; y < height; y++) {
       const cell = destCell[at(x, y)];
       if (!cell) continue; // only possible if region.cells is empty
+      if (cell.water) {
+        const def = WATER_GLYPHS[cell.water];
+        display.draw(x, y, def.glyph, '#000', def.fg);
+        continue;
+      }
       const def = region.palette[cell.biome];
-      const color = elevationShaded ? elevationBandColor(cell.elev, baseColor) : (def ? def.fg : '#888888');
+      const color = elevationShaded && !WATER_BIOMES.has(cell.biome)
+        ? elevationBandColor(cell.elev, baseColor)
+        : (def ? def.fg : '#888888');
       display.draw(x, y, def ? def.glyph : '?', '#000', color);
     }
   }

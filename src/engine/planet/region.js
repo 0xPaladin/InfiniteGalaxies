@@ -1,9 +1,24 @@
+// IMPLEMENTATION_PLAN.md §11 — region generation as a window onto a
+// continuous planet-wide field, replacing AFMG's per-region template
+// generation entirely (§11.3: once field.js supplies the heightmap and
+// hydrology-local.js supplies rivers/lakes, AFMG has no remaining job at
+// region scale — its own post-hoc height mutation and h<20-as-ocean
+// convention were the root cause of the seam/flooding bugs this replaces).
 import { PRNG } from '../random.js';
 import { childSeed, coordSeed } from '../seed.js';
-import { makeNoise2D, fbm } from './noise.js';
-import { prepareCellTerrain } from './cell-terrain.js';
-import { PROFILES } from './profiles.js';
-import { biasHabitableRegion } from './habitable-biome.js';
+import { buildFieldSampler } from './field.js';
+import { computeLocalHydrology, offsetLonLat } from './hydrology-local.js';
+
+// Fixed window, not the old equal-area-square sizing — with terrain as a
+// pure function of position (§11.1), a region no longer needs to "tile" its
+// neighbors by construction, so there's nothing left for a variable size to
+// serve. 500km / 2km-per-tile matches what the renderer already expects
+// (rogue/region.js). HALO_KM is the measured minimum for exact hydrology
+// seam-agreement (IMPLEMENTATION_PLAN.md §11.2) between two overlapping
+// windows — anything less measurably disagrees at the boundary.
+export const WINDOW_KM = 500;
+export const HALO_KM = 100;
+export const KM_PER_TILE = 2;
 
 /** Nearest surface cell's INDEX to a clicked surface-space point (x,y) — the region for that click. */
 export function regionCellIndexFor(surface, x, y) {
@@ -28,7 +43,7 @@ function pickSites(seed, cells, opts = {}) {
   const rng = new PRNG(childSeed(seed, 'sites'));
   const idealElev = 40;
   const scored = cells
-    .filter(c => c.elev > 5) // skip obviously submerged/basin cells
+    .filter(c => c.elev > 5 && !c.water) // skip obviously submerged/basin cells
     .map(c => ({ c, score: -Math.abs(c.elev - idealElev) + rng.range(-8, 8) }))
     .sort((a, b) => b.score - a.score);
 
@@ -41,9 +56,11 @@ function pickSites(seed, cells, opts = {}) {
 }
 
 function pickLocalCell(cells, rng, idealElev = 40) {
-  if (!cells.length) return null;
+  const dry = cells.filter(c => !c.water);
+  const pool = dry.length ? dry : cells;
+  if (!pool.length) return null;
   let best = null, bestScore = -Infinity;
-  for (const c of cells) {
+  for (const c of pool) {
     const score = -Math.abs(c.elev - idealElev) + rng.range(-8, 8);
     if (score > bestScore) { bestScore = score; best = c; }
   }
@@ -61,11 +78,11 @@ function pickLocalCell(cells, rng, idealElev = 40) {
 // region's own newly-generated terrain (not literally "at" the parent cell's
 // lon/lat, which has no meaning in the region's local km coordinate space).
 function sitesFromHabitats(habitats, parentCell, localCells, seed) {
+  if (!parentCell) return [];
   const matched = habitats.filter(h => h.pos &&
     Math.abs(h.pos.x - parentCell.x) < 1e-6 && Math.abs(h.pos.y - parentCell.y) < 1e-6);
   if (!matched.length) return [];
 
-  const rng = new PRNG(childSeed(seed, 'site-placement'));
   return matched.map((h, i) => {
     const local = pickLocalCell(localCells, new PRNG(childSeed(seed, 'site-placement', i)));
     return {
@@ -84,6 +101,7 @@ function sitesFromHabitats(habitats, parentCell, localCells, seed) {
 // hemisphere view can show it before any region is entered) — this only
 // resolves it to a local in-region position, it never re-rolls.
 function ruinSitesFromPlanetRuins(ruins, parentCell, localCells, seed) {
+  if (!parentCell) return [];
   const matched = ruins.filter(r => r.pos &&
     Math.abs(r.pos.x - parentCell.x) < 1e-6 && Math.abs(r.pos.y - parentCell.y) < 1e-6);
   if (!matched.length) return [];
@@ -119,80 +137,54 @@ function resolveSites(regionSeed, parentCell, localCells, opts) {
   return sites.map(s => ({ ...s, tl }));
 }
 
-// A fresh small local noise field for moisture ONLY (0..1 raw, the exact input
-// shape every in-house PROFILE.moisture() expects) — elevation comes from
-// cell-terrain.js's neighbor-ramped heightmap instead (see generateRegion
-// below), but AFMG's own precipitation field is on a different, incompatible
-// scale, so moisture stays independently seeded local noise like the old
-// refinement path did.
-function localMoistureRaw(noise, x, y) {
-  return fbm(noise, x / 20 + 50, y / 20 + 50, 3, 0.5, 1.3);
-}
+const WATER_KIND_NAME = ['', 'stream', 'river', 'pond'];
 
 /**
- * Generate one region — a single planet surface cell's worth of local detail
- * (POPULATION_PLAN.md: "each planet cell is a region," equal-area square
- * bounds sized from the cell's own measured neighbor spacing). Async —
- * genuinely awaits AFMGData's region-mode terrain sim, used for EVERY planet
- * type now, not just habitable ones (see afmg-adapter.js's generateCellRegion
- * for why). Pure function of `surface` + `cellIndex` + `opts` — no live
- * reference to the parent planet object (§0).
+ * Build one region: a WINDOW_KM x WINDOW_KM window centered on (centerLon,
+ * centerLat), sampled from `surface`'s continuous field (field.js) with local
+ * hydrology (hydrology-local.js) layered on top. Pure function of its
+ * arguments — no live reference to a parent object (§0).
  *
  * @param {import('./types.js').PlanetSurface} surface
- * @param {number} cellIndex - index into surface.cells
- * @param {{sizeKm?: number, cells?: number, habitats?: Array, ruins?: Array, ctx?: Object, baseColor?: string|Array}} [opts] -
- *   `habitats` is the planet's full habitat list (population/habitation.js's
- *   generatePlanetHabitation); `ruins` is its full ruin list
- *   (generatePlanetRuins) — both matched to THIS region by exact parent-cell
- *   position. `ctx` is that planet's CultureContext, stamped onto every
- *   resolved site as `.tl` (rogue/region.js's sprawl-radius calculation).
- *   `baseColor` is the parent planet's own color (galaxy/planet.js) — passed
- *   straight through as `.baseColor` on the returned region, alongside
- *   `.type` (== surface.type), so rogue/region.js can render a non-habitable
- *   region with the same elevation-binned shading its hemisphere view uses
- *   (elevation-color.js) instead of a biome palette lookup.
+ * @param {number} centerLon
+ * @param {number} centerLat
+ * @param {number|null} cellIndex - the surface cell this region is centered
+ *   on, if any (drives habitat/ruin site matching below); null for a region
+ *   reached by traversal rather than a direct cell click (rogue.js) — such a
+ *   region still renders fully, it just can't match habitats/ruins to a
+ *   specific parent cell since it isn't centered on one.
+ * @param {{seedTag?: string, habitats?: Array, ruins?: Array, ctx?: Object, baseColor?: string|Array}} [opts]
+ * @returns {Object} region
  */
-export async function generateRegion(surface, cellIndex, opts = {}) {
-  const parentCell = surface.cells[cellIndex];
-  const regionSeed = coordSeed(surface.seed, 'region-cell', cellIndex);
+export function buildRegion(surface, centerLon, centerLat, cellIndex, opts = {}) {
+  const parentCell = cellIndex != null ? surface.cells[cellIndex] : null;
+  const regionSeed = opts.seedTag || coordSeed(surface.seed, 'region-at', centerLon.toFixed(3), centerLat.toFixed(3));
 
-  const { heightmapFn, sideKm } = prepareCellTerrain(surface, cellIndex, { fallbackSideKm: opts.sizeKm ?? 150 });
+  const sampler = buildFieldSampler(surface, centerLon, centerLat, WINDOW_KM, HALO_KM);
+  const hydro = computeLocalHydrology(surface, sampler, centerLon, centerLat, WINDOW_KM, HALO_KM, KM_PER_TILE);
 
-  const { generateCellRegion } = await import('./afmg-adapter.js');
-  const afmgRegion = await generateCellRegion(regionSeed, {
-    sizeKm: opts.sizeKm ?? sideKm,
-    heightmap: heightmapFn,
-    // Nudges AFMG's own local climate sim toward the parent cell's real
-    // temperature (same units — both are the AFMG planet-scale sim's own
-    // °C output) instead of a generic default. See habitable-biome.js for
-    // the accompanying moisture/biome bias, which does the same job more
-    // decisively for the habitable branch below.
-    tempC: parentCell.temp
-  });
-
-  let cells = afmgRegion.cells;
-  let palette = afmgRegion.palette;
-
-  const profile = PROFILES[surface.type];
-  if (profile) {
-    // Non-habitable types: keep AFMG's geologically-plausible elevation SHAPE,
-    // but re-derive moisture/biome through this planet type's OWN calibrated
-    // logic instead of AFMG's Earth-biome classifier (see profiles.js).
-    const moistureNoise = makeNoise2D(childSeed(regionSeed, 'detail-moisture'));
-    cells = afmgRegion.cells.map(c => {
-      const raw = localMoistureRaw(moistureNoise, c.x, c.y);
-      const moisture = profile.moisture(raw, c.elev);
-      const temp = profile.temperature(parentCell.y, c.elev);
-      return { x: c.x, y: c.y, elev: c.elev, moisture, temp, biome: profile.biome(c.elev, moisture, temp) };
-    });
-    palette = surface.palette;
-  } else if (surface.type === 'habitable') {
-    // Habitable: AFMG's own biome classifier is otherwise blind to what the
-    // parent surface cell actually was — bias moisture toward it and
-    // reclassify, so a region generated from a forest tile predominantly
-    // comes out forest instead of whatever AFMG's generic regional climate
-    // model produced. See habitable-biome.js.
-    cells = biasHabitableRegion(afmgRegion.cells, parentCell);
+  const n = hydro.n; // WINDOW_KM / KM_PER_TILE
+  const R = surface.radius || 6371;
+  const originKm = -WINDOW_KM / 2;
+  const cells = new Array(n * n);
+  for (let j = 0; j < n; j++) {
+    for (let i = 0; i < n; i++) {
+      const k = j * n + i;
+      const localX = i * KM_PER_TILE, localY = j * KM_PER_TILE;
+      // heightAt() was already sampled once by hydrology-local (its `h`) —
+      // reuse it rather than sampling the field a second time (field.js's
+      // detail-noise layer is the expensive part; paying for it twice would
+      // double region generation time for no benefit).
+      const elev = hydro.h[k];
+      const [lon, lat] = offsetLonLat(centerLon, centerLat, originKm + localX, originKm + localY, R);
+      const { moisture, temp } = sampler.climateAt(lon, lat, elev);
+      const biome = sampler.biomeAt(elev, moisture, temp);
+      const kindId = hydro.kind[k];
+      cells[k] = {
+        x: localX, y: localY, elev, temp, moisture, biome,
+        water: kindId ? WATER_KIND_NAME[kindId] : null
+      };
+    }
   }
 
   return {
@@ -200,13 +192,41 @@ export async function generateRegion(surface, cellIndex, opts = {}) {
     cellIndex,
     type: surface.type,
     baseColor: opts.baseColor,
-    lon: parentCell.x,
-    lat: parentCell.y,
-    sideKm,
-    bounds: afmgRegion.bounds,
+    lon: centerLon,
+    lat: centerLat,
+    sideKm: WINDOW_KM,
+    bounds: { minX: 0, maxX: WINDOW_KM, minY: 0, maxY: WINDOW_KM },
     cells,
-    features: afmgRegion.features,
+    features: [],
     sites: resolveSites(regionSeed, parentCell, cells, opts),
-    palette
+    palette: surface.palette
   };
+}
+
+/**
+ * Generate the region for a specific planet surface cell (the click-to-region
+ * entry point — rogue.js's _enterRegion). Thin wrapper over buildRegion:
+ * centers the window on that cell's own (lon,lat) exactly, so this really is
+ * a zoom into that spot on the planet, not an offset/mis-scaled sample of
+ * somewhere nearby (the bug this whole rework started from).
+ *
+ * @param {import('./types.js').PlanetSurface} surface
+ * @param {number} cellIndex - index into surface.cells
+ * @param {{habitats?: Array, ruins?: Array, ctx?: Object, baseColor?: string|Array}} [opts]
+ */
+export async function generateRegion(surface, cellIndex, opts = {}) {
+  const parentCell = surface.cells[cellIndex];
+  return buildRegion(surface, parentCell.x, parentCell.y, cellIndex, opts);
+}
+
+/**
+ * Generate a region centered on an arbitrary (lon,lat) — the traversal entry
+ * point (rogue.js: walking off a region's edge re-centers here instead of
+ * requiring a fresh cell click). Not tied to any one surface cell, so habitat/
+ * ruin matching is skipped (cellIndex: null) — a traversed-to region still
+ * renders fully, just without site data that was never generated for "the
+ * planet cell at this exact spot" in the first place.
+ */
+export async function generateRegionAt(surface, lon, lat, opts = {}) {
+  return buildRegion(surface, lon, lat, null, opts);
 }

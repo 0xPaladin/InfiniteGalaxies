@@ -2,6 +2,7 @@ import * as d3 from 'd3';
 import { geoVoronoi } from 'd3-geo-voronoi';
 import { SITE_GLYPHS } from './region.js';
 import { elevationBandColor } from './elevation-color.js';
+import { WATER_BIOMES } from '../planet/profiles.js';
 
 // Non-habitable in-house types (rocky/icy/hostile/barren/airless-moon) always
 // render elevation-binned (see elevation-color.js), not by biome/overlay —
@@ -69,8 +70,16 @@ function cellColor(cell, surface, overlay, ranges, bandColors) {
     return cell ? gasGiantBandColor(cell.y, bandColors) : '#333333';
   }
   if (NON_HABITABLE_TYPES.has(surface.type)) {
+    if (!cell) return '#333333';
+    // A body of liquid (or lava/acid) reads as that body, not as just
+    // another elevation band — same reason a habitable world's oceans
+    // aren't elevation-shaded either.
+    if (WATER_BIOMES.has(cell.biome)) {
+      const def = surface.palette[cell.biome];
+      return def ? def.fg : '#333333';
+    }
     const base = Array.isArray(bandColors) ? bandColors[0] : bandColors;
-    return cell ? elevationBandColor(cell.elev, base) : '#333333';
+    return elevationBandColor(cell.elev, base);
   }
   if (overlay === 'biome' || !cell) {
     const def = cell && surface.palette[cell.biome];
