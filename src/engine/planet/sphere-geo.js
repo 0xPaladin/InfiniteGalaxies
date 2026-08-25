@@ -31,6 +31,14 @@ export function greatCircleKm(radiusKm, lon1, lat1, lon2, lat2) {
 // before the point cloud/grid actually exists.
 export const TARGET_REGION_SIDE_KM = 450;
 
+// Gas giants have no region to drill into (no solid surface — VISION.md §4.3,
+// moons stand in for terrain instead), so their cells only ever need to look
+// right on the hemisphere view, not support a <500km-per-region guarantee.
+// Deliberately much coarser than TARGET_REGION_SIDE_KM: "bigger cells" was
+// the explicit ask, and a gas giant's real content (latitude band color) only
+// needs enough cells to read as bands, not fine per-cell detail.
+export const GAS_GIANT_TARGET_SIDE_KM = 12000;
+
 // Guard rails so a tiny asteroid-moon doesn't demand a near-zero cell count.
 // Upper bound is sized for the largest radius a habitable (HI<=2) world can
 // actually roll — 15000km, from astrophysics.js's "rocky" classification

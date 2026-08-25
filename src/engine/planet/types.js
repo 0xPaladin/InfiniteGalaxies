@@ -1,9 +1,12 @@
 import { childSeed } from '../seed.js';
+import { PRNG } from '../random.js';
 import { generateRocky } from './rocky.js';
 import { generateIcy } from './icy.js';
 import { generateHostile } from './hostile.js';
 import { generateBarren } from './barren.js';
 import { generateAirlessMoon } from './airless-moon.js';
+import { GLOBE_BOUNDS } from './common.js';
+import { dynamicGridDims, GAS_GIANT_TARGET_SIDE_KM } from './sphere-geo.js';
 // Dynamically imported only for the habitable branch — its module graph pulls in
 // AFMGData's own CDN dependencies (d3, alea, simplex-noise, ...), which a session
 // that never generates a habitable world shouldn't have to fetch.
@@ -58,6 +61,29 @@ function classify(planet) {
   return 'rocky';
 }
 
+// A coarse jittered lon/lat point cloud, same spirit as common.js's
+// buildSurfaceCells but without any of its noise/elevation machinery — a gas
+// giant has no terrain to speak of, just position (for the renderer's
+// latitude-band coloring, rogue/planet.js) and, now that real cells exist,
+// somewhere for a 'gas mine'/'cloud city' habitat to actually be sited
+// (previously impossible: pickSiteCell always got an empty cell list).
+// GAS_GIANT_TARGET_SIDE_KM keeps cells much bigger/fewer than a real
+// planet's, since there's no region to drill into and no fine detail to show.
+function buildGasGiantCells(seed, radiusKm) {
+  const { cols, rows } = dynamicGridDims(radiusKm, GAS_GIANT_TARGET_SIDE_KM);
+  const rng = new PRNG(childSeed(seed, 'gas-giant-jitter'));
+  const cellW = 360 / cols, cellH = 180 / rows;
+  const cells = [];
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      const lon = -180 + (col + 0.5) * cellW + (rng.rand() - 0.5) * cellW;
+      const lat = -90 + (row + 0.5) * cellH + (rng.rand() - 0.5) * cellH;
+      cells.push({ x: +lon.toFixed(2), y: +lat.toFixed(2), elev: 0, temp: 0, moisture: 0, biome: 'band' });
+    }
+  }
+  return cells;
+}
+
 const IN_HOUSE = {
   rocky: generateRocky,
   icy: generateIcy,
@@ -81,12 +107,17 @@ export async function generateSurface(planet, opts = {}) {
   const surfaceSeed = childSeed(planet._seed, 'surface');
 
   if (type === 'gas giant') {
-    // No surface grid for gas giants — see IMPLEMENTATION_PLAN.md §5 (banded-latitude
-    // renderer, no region drill-down). Callers should check `type` before expecting cells.
+    // A hemisphere-mapped gas giant still has no REGION to drill into (no
+    // solid surface — VISION.md §4.3, moons stand in for terrain instead;
+    // rogue/planet.js disables cell clicks for this type), but it does now
+    // get real (coarse, "bigger cells") surface cells so the hemisphere view
+    // can render latitude-band coloring instead of the old flat strip view.
     return {
       seed: surfaceSeed, type, HI: planet.HI, radius: planet.radius,
       gravity: planet.g, hydrographics: 0, atmosphere: planet.atmosphere,
-      meanTempC: planet.tempC, bounds: null, cells: [], regions: [], palette: {}
+      meanTempC: planet.tempC, bounds: GLOBE_BOUNDS,
+      cells: buildGasGiantCells(surfaceSeed, planet.radius || 69911),
+      regions: [], palette: {}
     };
   }
 

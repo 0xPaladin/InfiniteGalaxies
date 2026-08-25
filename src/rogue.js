@@ -15,7 +15,7 @@ import { generateSurface, classify } from './engine/planet/types.js';
 import { generateRegion } from './engine/planet/region.js';
 import { initPopulation, advancePopulation, populationView, buildSnapshotIndex } from './engine/population/sim.js';
 import { cultureContextFor } from './engine/population/context.js';
-import { generatePlanetHabitation, generateSystemHabitation, planetHasHabitats } from './engine/population/habitation.js';
+import { generatePlanetHabitation, generatePlanetRuins, generateSystemHabitation, planetHasHabitats } from './engine/population/habitation.js';
 import { generateNativeCulture } from './engine/population/native.js';
 import { buildTouchHorizon } from './engine/population/ledger.js';
 
@@ -358,14 +358,28 @@ class RogueApp {
         this._persist();
     }
 
-    // Same idea as _systemHasContent, one level down: does this planet have
-    // any habitat at all, without generating its surface first. `system` is
-    // this.top.data (the enclosing system) — its ctx is what any planet
-    // inside it would actually be placed under.
+    // Same idea as _systemHasContent, one level down: will this planet show
+    // ANYTHING when actually visited, without generating its surface first.
+    // `system` is this.top.data (the enclosing system, or the system view's
+    // `data` when called from the renderer) — its ctx is what any planet
+    // inside it would actually be placed under. Three independent sources,
+    // all cheap (no AFMG/in-house terrain generation triggered):
+    //   - a living culture's habitats (planetHasHabitats)
+    //   - a former culture's ruins (ctx.formerClaims — region.js's
+    //     ruinSiteFromLocalCells reads this the same way at region-entry)
+    //   - a possible pre-spacefaring native culture (generateNativeCulture
+    //     only ever reads surface.type, so a fake {type} stands in for the
+    //     real surface here — same trick, no terrain needed)
+    // Used both for "jump to next content planet" navigation and for the
+    // system view's inhabited/uninhabited glyph (rogue/system.js).
     _planetHasContent(system, planet) {
         const ctx = system.ctx;
-        if (!ctx || ctx.cultureId == null) return false;
-        return planetHasHabitats(planet._seed, ctx, classify(planet));
+        if (!ctx) return false;
+        const surfaceType = classify(planet);
+        if (ctx.cultureId != null && planetHasHabitats(planet._seed, ctx, surfaceType)) return true;
+        if (ctx.formerClaims && ctx.formerClaims.length) return true;
+        if (generateNativeCulture(planet._seed, ctx, { type: surfaceType })) return true;
+        return false;
     }
 
     // Jump the system view directly into the next/previous planet (by system
@@ -390,8 +404,9 @@ class RogueApp {
         const ctx = this._frameCtx();
         const surface = await generateSurface(planet);
         const habitation = generatePlanetHabitation(planet._seed, ctx, surface);
+        const ruins = generatePlanetRuins(planet._seed, ctx, surface);
         const native = generateNativeCulture(planet._seed, ctx, surface);
-        this.stack.push({ level: 'planet', data: surface, planet, habitation, native, ctx });
+        this.stack.push({ level: 'planet', data: surface, planet, habitation, ruins, native, ctx });
         this._render();
         this._persist();
     }
@@ -399,12 +414,17 @@ class RogueApp {
     // `surface` comes from the current top-of-stack 'planet' frame — a region is
     // one surface cell (POPULATION_PLAN.md: "each planet cell is a region"),
     // addressed by its index into that surface's cells, not a coordinate grid
-    // (see engine/planet/region.js). `habitats` lets the region surface real
-    // sites instead of inventing them (POPULATION_PLAN.md §14.2).
+    // (see engine/planet/region.js). `habitats`/`ruins` let the region surface
+    // real sites instead of inventing them (POPULATION_PLAN.md §14.2) — both
+    // were already resolved to an exact surface cell at planet-entry, so
+    // whatever the hemisphere view showed for this cell is exactly what shows
+    // up here; nothing gets re-rolled.
     async _enterRegion(cellIndex) {
         const surface = this.top.data;
         const habitats = this.top.habitation ? this.top.habitation.habitats : [];
-        const region = await generateRegion(surface, cellIndex, { habitats, ctx: this.top.ctx || this.currentCtx });
+        const ruins = this.top.ruins ? this.top.ruins.ruins : [];
+        const baseColor = this.top.planet ? this.top.planet.color : null;
+        const region = await generateRegion(surface, cellIndex, { habitats, ruins, ctx: this.top.ctx || this.currentCtx, baseColor });
         this.stack.push({ level: 'region', data: region });
         this._render();
         this._persist();
@@ -532,13 +552,24 @@ class RogueApp {
             const habCount = (data.habitation && data.habitation.habitats.length) || 0;
             toast(`Sector ${data.gx},${data.gy} — ${data.systems.length} systems${habCount ? `, ${habCount} habitats` : ''}`);
         } else if (level === 'system') {
-            this.top.index = RogueSystem(data, this.display).index;
+            this.top.index = RogueSystem(data, this.display, { hasContent: p => this._planetHasContent(data, p) }).index;
             const mega = (this.top.habitation && this.top.habitation.habitats.length) || 0;
             toast(`${data.name || 'System'} — ${data.planets.length} planets${mega ? `, ${mega} stellar megastructure(s)` : ''}${originNote(data.origin)}`);
         } else if (level === 'planet') {
+            // Unified into the same {type, pos, ...} shape real habitats
+            // already use (SITE_GLYPHS[type] lookup, rogue/planet.js) so ALL
+            // of a planet's content — habitats, a possible ruin, a possible
+            // native culture — shows on the hemisphere before drilling into
+            // any one region, not just habitats.
+            const habitats = this.top.habitation ? this.top.habitation.habitats : [];
+            const ruinMarkers = (this.top.ruins ? this.top.ruins.ruins : [])
+                .map(r => ({ type: 'ruin', pos: r.pos, cultureId: r.cultureId, bioform: r.bioform, extinctionCause: r.extinctionCause }));
+            const nativeMarkers = this.top.native && this.top.native.pos
+                ? [{ type: 'native', pos: this.top.native.pos, bioform: this.top.native.bioform, tl: this.top.native.tl }]
+                : [];
             RoguePlanet(this.top.planet, data, this.planetHost, {
                 overlay: this.planetOverlay,
-                habitats: this.top.habitation ? this.top.habitation.habitats : [],
+                habitats: [...habitats, ...ruinMarkers, ...nativeMarkers],
                 onCellClick: (cellIndex) => {
                     toast(`Descending to region ${cellIndex}...`);
                     this._enterRegion(cellIndex).catch(err => { console.error(err); toast('Error: ' + err.message); });
@@ -621,9 +652,15 @@ class RogueApp {
         } else if (level === 'planet') {
             this.infoFolder.add({ v: data.type }, 'v').name('Type').disable();
             this.infoFolder.add({ v: data.HI }, 'v').name('HI').disable();
-            if (data.type !== 'gas giant') {
+            if (data.type === 'habitable') {
+                // Every other type has a fixed look now — elevation-binned
+                // shading for non-habitable (rogue/elevation-color.js),
+                // latitude bands for gas giants — so the biome/elevation/
+                // temperature/moisture toggle is only meaningful for
+                // AFMG-real habitable worlds.
                 this.infoFolder.add(this, 'planetOverlay', PLANET_OVERLAYS).name('Overlay').onChange(() => this._render());
-            } else {
+            }
+            if (data.type === 'gas giant') {
                 this.infoFolder.add({ v: (this.top.planet.moons || []).length }, 'v').name('Moons').disable();
             }
             this.infoFolder.add({ v: (this.top.habitation && this.top.habitation.habitats.length) || 0 }, 'v').name('Habitats').disable();

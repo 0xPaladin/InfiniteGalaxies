@@ -69,24 +69,42 @@ transcension sites as violet, native-culture candidates as green, neutral outpos
 a system to generate and enter it, where you'll see the primary star, any companion stars, and
 planets arranged by orbital distance (a deterministic Fibonacci/golden-angle spiral, not randomly
 scattered) — the info panel also shows that system's origin (which historical event created it,
-and its founding bioform if it has one).
+and its founding bioform if it has one). Each planet draws hollow (`○` terrestrial / `◯` gas giant)
+or solid (`●` / `⬤`) depending on whether it actually has anything on it — a living culture's
+habitats, a former culture's ruins, or a possible pre-spacefaring native culture — without ever
+revealing which; that stays a surprise until you visit. The check is cheap (no terrain generation
+triggered just to decide a glyph), so it works instantly even on planets nobody's clicked yet.
 
 Click a planet — or a moon orbiting a gas giant — to descend to its **surface**. Unlike every other
 level, the planet view isn't ASCII: it's two side-by-side [d3](https://d3js.org/) orthographic
-hemispheres (near side / far side), each surface cell filled with its color only. A dropdown still
-re-colors the same cells by elevation, temperature, or moisture instead of biome. Any planet-level
-habitat gets a marker glyph at its actual surface position too (orbital-only habitats — stations,
-shipyards — have no surface position and don't get one), drawn on whichever hemisphere it's actually
-facing, so a settled world reads as settled before you drill into any one region. Click a cell to
-drill into its **region** — every surface cell IS a region (an equal-area square, its side length
+hemispheres (near side / far side). A habitable world's cells fill with real AFMG biome color (a
+dropdown re-colors the same cells by elevation, temperature, or moisture instead); every other
+solid type (rocky/icy/hostile/barren/airless-moon) always shades by elevation instead — dark at low
+elevation, light at high, binned into 10 coarse 0.1-wide steps rather than a smooth gradient (a
+terraced, topographic look) using that planet's own base color as the hue, so two rocky worlds with
+different colors still read as clearly different planets. A gas giant renders the same
+two-hemisphere layout too, just with much bigger/fewer cells (no region to drill into, so fine
+detail buys nothing) colored by latitude band from the planet's own hue pair — the same striped
+look the old flat renderer had, just following the real sphere now. Every planet-level habitat,
+possible ruin, and possible native culture gets a marker glyph at its actual surface position
+(orbital-only habitats — stations, shipyards — have no surface position and don't get one), drawn
+on whichever hemisphere it's actually facing, so a settled/haunted/inhabited world reads as such
+before you drill into any one region — and clicking that exact tile is guaranteed to show the same
+content the hemisphere promised, never a re-roll that might disagree. Click a cell to drill into
+its **region** — every surface cell IS a region (an equal-area square, its side length
 honest-measured from the cell's local density, so tiny moons get small regions and huge planets
 don't). Each region's terrain elevation ramps from that cell's own value to its 8 neighbors' at the
-edges/corners, with fine detail from 3D noise (seam-continuous across all boundaries). Generated via
-the vendored AFMG engine for geologically-plausible shapes. Shows real **habitats** (settlements,
-outposts, cities, orbital stations, megastructures — or ruins if the region fell within a dead
-empire's territory) with actual populations, and **features** (mountain peaks, water, rivers,
-coastlines). Deep-space stations and capital ships also appear as separate glyphs in the sector
-view. Gas giants have no surface to drill into — click a moon (rendered as a dot) instead.
+edges/corners, with fine detail from 3D noise (seam-continuous across all boundaries), colored the
+same way the hemisphere view colors that planet type (AFMG biome / elevation-binned / — gas giants
+have no region). Generated via the vendored AFMG engine for geologically-plausible shapes. Shows
+real **habitats** (settlements, outposts, cities, orbital stations, megastructures — or ruins if a
+former culture once held this exact spot) with actual populations, and **features** (mountain
+peaks, water, rivers, coastlines). A populated site sprawls across a filled disc of tiles around
+its center instead of a single glyph — radius scales with `log10(population)` but shrinks as the
+owning culture's TL rises (an arcology-era city reads noticeably more compact than a pre-industrial
+town of the same size, roughly half the footprint by TL 5.9 vs TL 4.0). Deep-space stations and
+capital ships also appear as separate glyphs in the sector view. Gas giants have no surface to
+drill into — click a moon (rendered beneath the hemispheres, orbital-scatter style) instead.
 
 **Finding content quickly:** hunting for the one system or planet with something on it, glyph by
 glyph, doesn't scale once a sector holds 100+ systems. The sector view's GUI panel shows a "Systems
@@ -143,7 +161,7 @@ plain scripts or loaded from CDN via an import map in `index.html`:
 | Library | Role |
 |---|---|
 | [ROT.js](https://ondras.github.io/rot.js/hp/) | ASCII display for every level except the planet view |
-| [d3](https://d3js.org/) + [d3-geo-voronoi](https://github.com/Fil/d3-geo-voronoi) | The planet-level view: two orthographic-projection hemispheres, cell fills built from a spherical Voronoi mesh over the surface cells |
+| [d3](https://d3js.org/) + [d3-geo-voronoi](https://github.com/Fil/d3-geo-voronoi) | The planet-level view: two orthographic-projection hemispheres, cell fills built from a spherical Voronoi mesh over the surface cells — every solid/gas-giant type now, not just habitable ones |
 | [lil-gui](https://lil-gui.georgealways.com/) | The control/info panel (loaded from CDN via ESM `import`) |
 | [localForage](https://localforage.github.io/localForage/) | Browser-storage persistence (seed + path only) |
 | [aleaPRNG](https://github.com/macmcmeans/aleaPRNG) | The seeded RNG every generator is built on |
@@ -193,6 +211,9 @@ src/
                                 transcension) — what galaxy/archetypes.js reads to decide sector content
     rogue/                    renderers — one per level, mirrors the generator folders. ASCII/ROT.Display
                               for every level except planet.js, which renders via d3 (see above)
+                              - elevation-color.js: shared dark-to-light, 0.1-binned elevation shading
+                                (planet.js's hemisphere view and region.js's terrain both use it) for
+                                every non-habitable solid type, keyed off that planet's own base color
 lib/                    vendored third-party scripts, including AFMGData
 docs/afmg-integration.md   notes from integrating the vendored AFMGData generator
 IMPLEMENTATION_PLAN.md  phased build plan (galaxy through region)
@@ -249,9 +270,9 @@ object; none of them draw anything.
 
 | Function | Signature | Returns |
 |---|---|---|
-| `generateSurface` | `async (planet, opts)` | a `PlanetSurface`: `{seed, type, bounds, cells: [{x, y, elev, temp, moisture, biome}], palette}` — `type` is one of `rocky \| icy \| hostile \| barren \| airless-moon \| habitable \| gas giant` |
+| `generateSurface` | `async (planet, opts)` | a `PlanetSurface`: `{seed, type, bounds, cells: [{x, y, elev, temp, moisture, biome}], palette}` — `type` is one of `rocky \| icy \| hostile \| barren \| airless-moon \| habitable \| gas giant`. Gas giants get real (much coarser — see "Dynamic surface cell count" below) surface cells now too, position-only (no elevation/biome), for the hemisphere view's latitude-band coloring and so `gas mine`/`cloud city` habitats have somewhere real to be sited |
 | `classify` | `(planet)` | which of those types a planet resolves to, from its existing `HI`/temperature/atmosphere fields |
-| `generateRegion` | `async (surface, cellIndex, opts)` | one surface cell's local region: `{seed, cellIndex, lon, lat, sideKm, bounds, cells, features, sites, palette}` — bounds are an equal-area square (side length measured from the cell's own k-nearest-neighbor density, so it's honest about real local spacing, not a flat ~100km claim). Terrain elevation ramps from this cell's own value to its 8 cardinal neighbors' at the region's edges/corners; fine detail layered via 3D-sphere-sampled noise (exactly seam-continuous across all region boundaries). `opts.habitats`/`opts.ctx` drive site placement same as before. |
+| `generateRegion` | `async (surface, cellIndex, opts)` | one surface cell's local region: `{seed, cellIndex, type, baseColor, lon, lat, sideKm, bounds, cells, features, sites, palette}` — bounds are an equal-area square (side length measured from the cell's own k-nearest-neighbor density, so it's honest about real local spacing, not a flat ~100km claim). Terrain elevation ramps from this cell's own value to its 8 cardinal neighbors' at the region's edges/corners; fine detail layered via 3D-sphere-sampled noise (exactly seam-continuous across all region boundaries). `opts.habitats`/`opts.ruins`/`opts.ctx` drive site placement — both habitat and ruin positions are resolved once at the PLANET level (see `generatePlanetHabitation`/`generatePlanetRuins` below) and matched here by exact cell position, never re-rolled, so the region always matches whatever the hemisphere view already showed. `opts.baseColor` passes through as `.baseColor` (paired with `.type`) for rogue/region.js's elevation shading. Every resolved site also carries `.tl` (from `opts.ctx`), used by the region renderer's population-sprawl radius. |
 | `regionCellIndexFor` | `(surface, x, y)` | which surface cell (by index) a clicked point is nearest to |
 
 Every planet type's regions now route through the vendored AFMGData generator (for its
@@ -325,6 +346,11 @@ CPU time for honest region sizing across the full body-size range, since every r
 its own neighborhood, not a one-size-fits-all template — on a tiny moon, 14k would be absurd,
 but so would claiming a 100km-side region covers a 2000km-radius body.
 
+Gas giants use a separate, much coarser target (`GAS_GIANT_TARGET_SIDE_KM`, 12000km vs. 450km) —
+there's no region to drill into and no fine detail to show, just enough cells for the hemisphere
+view's latitude bands to read cleanly. A Jupiter-radius giant gets ~650 cells; a Neptune-radius one
+~70 — an order of magnitude fewer than a real planet at any comparable size.
+
 ### Population / culture simulation (`src/engine/population/`)
 
 | Function | Signature | Returns |
@@ -336,10 +362,11 @@ but so would claiming a 100km-side region covers a 2000km-radius body.
 | `populationOf` | `(node, popIndex)` | *(in `galaxy/galaxy_gen.js`)* — the one place anything reads a sector's development score from |
 | `cultureContextFor` | `(popIndex, cultures, gx, gy)` | a `CultureContext` object: the culture data + development state for a given sector |
 | `generatePlanetHabitation` | `(seed, ctx, surface)` | `{seed, habitats: [...]}` — all settlements/outposts/cities/stations on a planet, placed by culture TL and bioform |
-| `planetHasHabitats` | `(seed, ctx, surfaceType)` | `boolean` — whether a planet would get any habitat, without generating its full surface first (same RNG-deterministic result `generatePlanetHabitation` would produce, just skipping the surface-dependent site-position lookup); powers the sector/system "jump to next content" navigation |
+| `planetHasHabitats` | `(seed, ctx, surfaceType)` | `boolean` — whether a planet would get any habitat, without generating its full surface first (same RNG-deterministic result `generatePlanetHabitation` would produce, just skipping the surface-dependent site-position lookup); powers the sector/system "jump to next content" navigation and the system view's solid/hollow planet glyph |
+| `generatePlanetRuins` | `(seed, ctx, surface)` | `{seed, ruins: [{cultureId, bioform, extinctionCause, pos}]}` — a possible ruin from `ctx.formerClaims` (0.3 chance), resolved to one exact surface cell ONCE at the planet level (moved here from region.js, which used to re-roll independently every time a region was entered) — so the hemisphere view can show it before any region is visited, and the region you actually click always agrees |
 | `generateSystemHabitation` | `(seed, ctx)` | stellar megastructures (collectors, ringworld segments) attached to a system's star |
 | `generateSectorHabitation` | `(seed, ctx, bounds)` | sector-level habitats (deep space stations, capital ships, derelicts, pirate havens) |
-| `generateNativeCulture` | `(seed, ctx, surface)` | a pre-spacefaring (TL 0–3) native culture on a planet, or null if none arose; entirely outside the main sim |
+| `generateNativeCulture` | `(seed, ctx, surface)` | a pre-spacefaring (TL 0–3) native culture on a planet, or null if none arose; entirely outside the main sim. Now also resolves a real `pos` (surface cell x/y) when `surface.cells` is populated, same site-picking heuristic real habitats use, so it can show a hemisphere marker too |
 | `buildTouchHorizon` | `(pop)` *(population/ledger.js)* | `Map<cellKey, earliestStep>` — the earliest step each sector cell was EVER claimed by a culture; computed once per population and cached (`rogue.js`), not per sector-entry |
 | `ringDistanceToTouched` | `(touchHorizon, gx, gy, uptoStep, maxRing)` *(population/ledger.js)* | Chebyshev ring-distance from a sector to the nearest one touched at or before `uptoStep` — what fades untouched-sector content out with distance |
 | `sectorLedger` | `(pop, gx, gy, uptoStep)` *(population/ledger.js)* | the chronological event timeline for one sector cell — `birth\|resettle\|sustained\|contested\|conflict\|death\|extinction\|transcension`, each with that culture's bioform/TL/traits AS OF that step (not its current/final state) |

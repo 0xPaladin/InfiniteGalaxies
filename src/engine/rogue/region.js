@@ -1,12 +1,28 @@
 import { project } from './view.js';
+import { elevationBandColor } from './elevation-color.js';
+
+// Non-habitable regions (rocky/icy/hostile/barren/airless-moon) render
+// elevation-binned (see elevation-color.js), same as their planet-hemisphere
+// view — habitable stays biome-palette-driven (AFMG's real classification).
+// Glyphs still come from the biome palette either way (profiles.js still
+// classifies plains/hills/mountain/etc for non-habitable types) — only the
+// COLOR changes, so the terrain still reads by shape, just colored by
+// elevation band + the planet's own hue instead of a fixed per-biome color.
+const NON_HABITABLE_TYPES = new Set(['rocky', 'icy', 'hostile', 'barren', 'airless-moon']);
 
 // The `settlement`/`marker` entries are the pickSites() fallback vocabulary
-// (region.js, used only when no population/habitation data is wired in); every
-// other key is a real habitat type from population/habitat.js's catalog.
+// (region.js, used only when no population/habitation data is wired in);
+// `native` is population/native.js's independent TL0-3 mechanism, not a
+// habitat.js catalog entry; every other key is a real habitat type from
+// population/habitat.js's catalog.
 export const SITE_GLYPHS = {
   settlement: { glyph: '⌂', fg: '#ffe08a' },
   marker: { glyph: '✦', fg: '#ffffff' },
   ruin: { glyph: '▦', fg: '#aa8866' },
+  // Green matches sector.js's ORIGIN_COLOR for a 'native-candidate' system —
+  // same color means the same thing (possible pre-spacefaring life) at every
+  // level, sector down through hemisphere.
+  native: { glyph: '♦', fg: '#7ddd7d' },
   outpost: { glyph: '▣', fg: '#8ac9ff' },
   'mining outpost': { glyph: '▨', fg: '#c9a86a' },
   'gas mine': { glyph: '▨', fg: '#c9a86a' },
@@ -31,6 +47,31 @@ const FEATURE_GLYPHS = {
   lake: { glyph: '≈', fg: '#4499dd' },
   lake_island: { glyph: 'o', fg: '#c8b878' }
 };
+
+// A city/town's built-up footprint, in tiles (2km/tile — see KM_PER_TILE
+// below), not just its single center glyph. Two inputs: `population` (bigger
+// settlements sprawl wider) and `tl` (higher tech shrinks the footprint back
+// down — dense arcology-style vertical growth instead of horizontal sprawl,
+// POPULATION_PLAN.md's TL 5+ "constructed" preference already models the
+// same idea for WHICH habitat gets built; this is its visual footprint).
+// Below ~5000 population there's nothing worth drawing beyond the center
+// tile (an outpost/research station stays a pinpoint regardless of TL).
+function sprawlRadiusTiles(population, tl) {
+  if (!population || population < 5000) return 0;
+  const baseRadius = Math.min(5, Math.max(0, Math.log10(population) - 3)); // 0 @1e3, ~5 @1e8
+  const tlFactor = 1 + Math.max(0, (tl ?? 4) - 4) * 0.5; // 1.0 @TL4, ~1.95 @TL5.9
+  return Math.min(6, Math.round(baseRadius / tlFactor));
+}
+
+function hexToRgb(hex) {
+  const n = parseInt(hex.replace('#', ''), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+function darken(hex, t) {
+  const [r, g, b] = hexToRgb(hex);
+  const c = v => Math.max(0, Math.min(255, Math.round(v * (1 - t)))).toString(16).padStart(2, '0');
+  return `#${c(r)}${c(g)}${c(b)}`;
+}
 
 function toGrid(x, y, bounds, width, height) {
   const spanX = (bounds.maxX - bounds.minX) || 1;
@@ -117,12 +158,16 @@ export function RogueRegion(region, display) {
     }
   }
 
+  const elevationShaded = NON_HABITABLE_TYPES.has(region.type);
+  const baseColor = Array.isArray(region.baseColor) ? region.baseColor[0] : region.baseColor;
+
   for (let x = 0; x < width; x++) {
     for (let y = 0; y < height; y++) {
       const cell = destCell[at(x, y)];
       if (!cell) continue; // only possible if region.cells is empty
       const def = region.palette[cell.biome];
-      display.draw(x, y, def ? def.glyph : '?', '#000', def ? def.fg : '#888888');
+      const color = elevationShaded ? elevationBandColor(cell.elev, baseColor) : (def ? def.fg : '#888888');
+      display.draw(x, y, def ? def.glyph : '?', '#000', color);
     }
   }
 
@@ -134,10 +179,31 @@ export function RogueRegion(region, display) {
     index.add(gx, gy, f);
   });
 
-  // sites — drawn last so they're always visible on top
+  // sites — drawn last so they're always visible on top. A populated site
+  // (town/city/...) sprawls across a filled disc of tiles around its center
+  // (sprawlRadiusTiles) — dimmer "built-up area" fill outward, the site's own
+  // strong glyph at the exact center, drawn after so it always wins. Every
+  // sprawl tile is also hit-tested to the same site, so clicking anywhere in
+  // a city reveals it, not just its exact center pixel.
   (region.sites || []).forEach(s => {
     const [gx, gy] = toGrid(s.x, s.y, bounds, width, height);
     const def = SITE_GLYPHS[s.kind] || { glyph: '✦', fg: '#ffffff' };
+    const radius = sprawlRadiusTiles(s.population, s.tl);
+
+    if (radius > 0) {
+      const sprawlColor = darken(def.fg, 0.45);
+      for (let dx = -radius; dx <= radius; dx++) {
+        for (let dy = -radius; dy <= radius; dy++) {
+          if (dx === 0 && dy === 0) continue; // center tile drawn below, full strength
+          if (Math.hypot(dx, dy) > radius) continue; // filled circle, not a square
+          const tx = gx + dx, ty = gy + dy;
+          if (tx < 0 || ty < 0 || tx >= width || ty >= height) continue;
+          display.draw(tx, ty, '▪', sprawlColor);
+          index.add(tx, ty, s);
+        }
+      }
+    }
+
     display.draw(gx, gy, def.glyph, def.fg);
     index.add(gx, gy, s);
   });

@@ -1,6 +1,12 @@
 import * as d3 from 'd3';
 import { geoVoronoi } from 'd3-geo-voronoi';
 import { SITE_GLYPHS } from './region.js';
+import { elevationBandColor } from './elevation-color.js';
+
+// Non-habitable in-house types (rocky/icy/hostile/barren/airless-moon) always
+// render elevation-binned (see elevation-color.js), not by biome/overlay —
+// habitable stays AFMG-biome-driven, gas giant stays latitude-band-driven.
+const NON_HABITABLE_TYPES = new Set(['rocky', 'icy', 'hostile', 'barren', 'airless-moon']);
 
 // ── color helpers (renderer-local derived data — §0: computed here, not stored
 // on the generated object) ──────────────────────────────────────────────────
@@ -43,7 +49,29 @@ const OVERLAY_RAMPS = {
 };
 const RANGE_KEY_BY_OVERLAY = { elevation: 'elev', temperature: 'temp', moisture: 'moisture' };
 
-function cellColor(cell, surface, overlay, ranges) {
+// A gas giant's cells carry no real elevation/biome (types.js's
+// buildGasGiantCells — position only, "bigger cells" than a real planet's,
+// no region to drill into) — color comes from latitude band instead, same
+// striped-band look the old flat renderer had, just per-cell now so it
+// follows the same hemisphere/Voronoi mesh solid planets use. `bandColors`
+// is the planet's own 1-2 hue set (galaxy/planet.js), not stored on the
+// generated surface — same "computed here" spirit as everything else below.
+const GAS_GIANT_BANDS = 24;
+function gasGiantBandColor(lat, bandColors) {
+  const colors = Array.isArray(bandColors) && bandColors.length ? bandColors : ['#c9a86a', '#8a6d4a'];
+  const t = Math.min(1, Math.max(0, (90 - lat) / 180)); // 0 at north pole -> 1 at south, matches old top-to-bottom stripe order
+  const band = Math.min(GAS_GIANT_BANDS - 1, Math.floor(t * GAS_GIANT_BANDS));
+  return colors[band % colors.length];
+}
+
+function cellColor(cell, surface, overlay, ranges, bandColors) {
+  if (surface.type === 'gas giant') {
+    return cell ? gasGiantBandColor(cell.y, bandColors) : '#333333';
+  }
+  if (NON_HABITABLE_TYPES.has(surface.type)) {
+    const base = Array.isArray(bandColors) ? bandColors[0] : bandColors;
+    return cell ? elevationBandColor(cell.elev, base) : '#333333';
+  }
   if (overlay === 'biome' || !cell) {
     const def = cell && surface.palette[cell.biome];
     return def ? def.fg : '#333333';
@@ -65,7 +93,7 @@ function buildProjection(rotateLon, size) {
 // surrounding chrome/palette, not from drawing characters onto the globe
 // here) but real habitats DO get a marker glyph (see below) so a settled
 // world reads as settled at a glance, before drilling into any one region.
-function renderHemisphere(svg, cx, cy, size, surface, voronoi, rotateLon, overlay, ranges, onCellClick, habitats) {
+function renderHemisphere(svg, cx, cy, size, surface, voronoi, rotateLon, overlay, ranges, onCellClick, habitats, bandColors) {
   const projection = buildProjection(rotateLon, size);
   const path = d3.geoPath(projection);
   const g = svg.append('g').attr('transform', `translate(${cx},${cy})`);
@@ -87,7 +115,7 @@ function renderHemisphere(svg, cx, cy, size, surface, voronoi, rotateLon, overla
     .join('path')
     .attr('class', 'region-cell')
     .attr('d', path)
-    .attr('fill', d => cellColor(surface.cells[d.i], surface, overlay, ranges))
+    .attr('fill', d => cellColor(surface.cells[d.i], surface, overlay, ranges, bandColors))
     .on('click', (event, d) => onCellClick(d.i));
 
   // Habitat markers: orbital habitats (stations, shipyards, ...) have no
@@ -117,30 +145,62 @@ function renderHemisphere(svg, cx, cy, size, surface, voronoi, rotateLon, overla
   return g;
 }
 
+// A gas giant's moons orbit it in space — they aren't points ON its surface,
+// so unlike habitat/ruin/native markers they can't be projected through the
+// hemisphere's geoOrthographic projection at all. Drawn as a separate
+// top-down orbital scatter beneath the two hemispheres instead (same layout
+// the old flat-band renderer used), scaled by AU like the system view's own
+// orbital scatter. Solid planets' moons aren't shown here (out of scope —
+// gas giants are the only type with no region to drill into, so descending
+// via a moon is their ONLY way down; VISION.md §4.3).
+function renderMoonStrip(svg, cx, cy, size, moons, onMoonClick) {
+  const maxAu = Math.max(1, ...moons.map(m => m.pos.au));
+  const scale = (size / 2 * 0.85) / (maxAu * 1.15);
+  const ccx = cx + size / 2, ccy = cy + size / 2;
+
+  svg.selectAll('circle.moon')
+    .data(moons)
+    .join('circle')
+    .attr('class', 'region-cell')
+    .attr('cx', m => ccx + m.pos.x * scale)
+    .attr('cy', m => ccy + m.pos.y * scale)
+    .attr('r', 5)
+    .attr('fill', m => (m.HI === 1 ? '#228B22' : m.HI === 2 ? '#1E90FF' : '#cccccc'))
+    .on('click', (event, m) => onMoonClick(m));
+}
+
 /**
- * Render a solid planet surface as two side-by-side orthographic hemispheres
- * (near side / far side, POPULATION_PLAN.md request) — tile color only, no
- * glyphs. Pure renderer per IMPLEMENTATION_PLAN.md §0: reads `surface`, draws
- * into `container`, and drives clicks through `opts.onCellClick` directly
- * (d3's native per-element event binding, rather than the ROT-renderer TileIndex
- * hit-test pattern the ASCII levels use — appropriate here since d3 owns the
- * DOM elements being clicked).
+ * Render a planet surface as two side-by-side orthographic hemispheres (near
+ * side / far side, POPULATION_PLAN.md request) — tile color only, no glyphs
+ * beyond the habitat/ruin/native markers. Pure renderer per
+ * IMPLEMENTATION_PLAN.md §0: reads `surface`, draws into `container`, and
+ * drives clicks through `opts.onCellClick` directly (d3's native per-element
+ * event binding, rather than the ROT-renderer TileIndex hit-test pattern the
+ * ASCII levels use — appropriate here since d3 owns the DOM elements being
+ * clicked). Gas giants (`surface.type === 'gas giant'`) use the same
+ * hemisphere mesh — colored by latitude band instead of biome/overlay (see
+ * cellColor) — but cell clicks are disabled (no solid surface, no region to
+ * drill into) and, if `opts.moons` is non-empty, an orbital moon scatter
+ * renders beneath the hemispheres as the actual way down.
  */
 function renderSurface(surface, container, opts) {
   const overlay = opts.overlay || 'biome';
+  const isGasGiant = surface.type === 'gas giant';
+  const moons = isGasGiant ? (opts.moons || []) : [];
   const hostW = container.clientWidth || 900;
   const hostH = container.clientHeight || 560;
-  const size = Math.max(240, Math.min(hostW / 2 - 30, hostH - 30));
+  const moonStripH = moons.length ? 90 : 0;
+  const size = Math.max(240, Math.min(hostW / 2 - 30, hostH - 30 - moonStripH));
   const gap = 24;
   const totalW = size * 2 + gap;
-  const totalH = size + 20;
+  const totalH = size + 20 + moonStripH;
 
   const svg = d3.select(container).append('svg')
     .attr('width', totalW).attr('height', totalH)
     .attr('viewBox', `0 0 ${totalW} ${totalH}`)
     .style('max-width', '100%').style('max-height', '100%');
 
-  const ranges = {
+  const ranges = isGasGiant ? null : {
     elevation: cellRange(surface.cells, 'elev'),
     temperature: cellRange(surface.cells, 'temp'),
     moisture: cellRange(surface.cells, 'moisture')
@@ -152,75 +212,41 @@ function renderSurface(surface, container, opts) {
     geometry: { type: 'Point', coordinates: [c.x, c.y] }
   }));
   const voronoi = geoVoronoi(points);
-  const onCellClick = opts.onCellClick || (() => {});
+  const onCellClick = isGasGiant ? (() => {}) : (opts.onCellClick || (() => {}));
   const habitats = opts.habitats || [];
+  const bandColors = opts.bandColors;
 
-  renderHemisphere(svg, 0, 0, size, surface, voronoi, 0, overlay, ranges, onCellClick, habitats);
+  renderHemisphere(svg, 0, 0, size, surface, voronoi, 0, overlay, ranges, onCellClick, habitats, bandColors);
   svg.append('text').attr('class', 'hemisphere-label').attr('x', size / 2).attr('y', size + 16).text('0° meridian');
 
-  renderHemisphere(svg, size + gap, 0, size, surface, voronoi, 180, overlay, ranges, onCellClick, habitats);
+  renderHemisphere(svg, size + gap, 0, size, surface, voronoi, 180, overlay, ranges, onCellClick, habitats, bandColors);
   svg.append('text').attr('class', 'hemisphere-label').attr('x', size + gap + size / 2).attr('y', size + 16).text('180° meridian');
 
-  return {};
-}
-
-// A gas giant has no surface cells (VISION.md §4.3: moons stand in for terrain
-// to descend into) — horizontal color bands plus its moons as clickable dots,
-// same information as the old ASCII renderer, drawn with the same technology
-// as the surface view above so the planet level is consistently d3-driven.
-function renderGasGiant(planet, container, opts) {
-  const size = Math.max(240, Math.min(container.clientWidth || 480, container.clientHeight || 480));
-  const svg = d3.select(container).append('svg')
-    .attr('width', size).attr('height', size)
-    .attr('viewBox', `0 0 ${size} ${size}`)
-    .style('max-width', '100%').style('max-height', '100%');
-
-  const colors = Array.isArray(planet.color) ? planet.color : [planet.color, planet.color];
-  const bands = 24;
-  const bandH = size / bands;
-  for (let i = 0; i < bands; i++) {
-    svg.append('rect')
-      .attr('x', 0).attr('y', i * bandH).attr('width', size).attr('height', bandH + 1)
-      .attr('fill', colors[i % colors.length]);
-  }
-
-  const moons = planet.moons || [];
   if (moons.length) {
-    const maxAu = Math.max(1, ...moons.map(m => m.pos.au));
-    const scale = (size / 2 * 0.85) / (maxAu * 1.15);
-    const cx = size / 2, cy = size / 2;
-    const onMoonClick = opts.onMoonClick || (() => {});
-
-    svg.selectAll('circle.moon')
-      .data(moons)
-      .join('circle')
-      .attr('class', 'region-cell')
-      .attr('cx', m => cx + m.pos.x * scale)
-      .attr('cy', m => cy + m.pos.y * scale)
-      .attr('r', 5)
-      .attr('fill', m => (m.HI === 1 ? '#228B22' : m.HI === 2 ? '#1E90FF' : '#cccccc'))
-      .on('click', (event, m) => onMoonClick(m));
+    const stripSize = Math.min(totalW, moonStripH) - 10;
+    renderMoonStrip(svg, (totalW - stripSize) / 2, size + 30, stripSize, moons, opts.onMoonClick || (() => {}));
   }
 
   return {};
 }
 
 /**
- * Top-level planet-view renderer — dispatches on surface.type. Pure per §0.
- * `container` is a plain DOM element (this level renders via d3/SVG, not
- * ROT.Display — see rogue.js's level-switch), cleared and redrawn each call.
+ * Top-level planet-view renderer. Pure per §0. `container` is a plain DOM
+ * element (this level renders via d3/SVG, not ROT.Display — see rogue.js's
+ * level-switch), cleared and redrawn each call.
  *
  * @param {Object} planet - generatePlanet()/generateMoon() output
  * @param {import('../planet/types.js').PlanetSurface} surface - generateSurface(planet) output
  * @param {HTMLElement} container
  * @param {{overlay?: string, onCellClick?: (cellIndex:number)=>void, onMoonClick?: (moon:Object)=>void, habitats?: Array}} [opts] -
- *   `habitats` (population/habitation.js's generatePlanetHabitation output) get
- *   a marker glyph on whichever hemisphere they're actually facing; entries
- *   with `pos: null` (orbital habitats — no surface position) are skipped.
+ *   `habitats` (population/habitation.js's generatePlanetHabitation output,
+ *   plus rogue.js's ruin/native markers) get a marker glyph on whichever
+ *   hemisphere they're actually facing; entries with `pos: null` (orbital
+ *   habitats — no surface position) are skipped. `bandColors`/`moons` are
+ *   only used for a gas giant (planet.color / planet.moons) — harmless to
+ *   pass for any other type, since they're simply never read there.
  */
 export function RoguePlanet(planet, surface, container, opts = {}) {
   container.innerHTML = '';
-  return surface.type === 'gas giant'
-    ? renderGasGiant(planet, container, opts)
-    : renderSurface(surface, container, opts);
+  return renderSurface(surface, container, { ...opts, bandColors: planet.color, moons: planet.moons });
 }

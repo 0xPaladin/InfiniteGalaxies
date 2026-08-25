@@ -7,7 +7,7 @@ import { eligibleHabitats, placementChance, rollPopulation } from './habitat.js'
 // (avoids oceans/basins and mountain peaks without needing real terrain
 // analysis). Independent implementation on purpose: habitation.js runs before
 // any region is ever generated, so it can't depend on region.js internals.
-function pickSiteCell(cells, rng) {
+export function pickSiteCell(cells, rng) {
   if (!cells || !cells.length) return null;
   const idealElev = 40;
   let best = null, bestScore = -Infinity;
@@ -84,6 +84,43 @@ export function planetHasHabitats(seed, ctx, surfaceType) {
   if (rollHabitats(habSeed, 'planet', ctx, surfaceType).length) return true;
   if (rollHabitats(habSeed, 'orbit', ctx, surfaceType).length) return true;
   return false;
+}
+
+/**
+ * A possible ruin left by a former claimant of this planet's territory
+ * (§13.1) — flavored by `ctx.formerClaims`, not invented from nothing. Not
+ * every eligible planet shows one (0.3 chance): a dead empire's whole former
+ * territory being wall-to-wall ruins would read as noise, not history.
+ *
+ * Moved here from planet/region.js (which used to roll this independently
+ * PER REGION on entry) so the decision — and the exact surface cell it
+ * lands on — is made ONCE at the planet level, the same way
+ * generatePlanetHabitation() sites real habitats. That's what lets the
+ * hemisphere view (rogue/planet.js) show a ruin marker BEFORE you've drilled
+ * into any region, and guarantees the region you actually click matches: a
+ * ruin here always resolves to a `{kind:'ruin', ...}` region site at the
+ * exact same surface cell, never a re-roll that might disagree.
+ *
+ * @param {string} seed - the planet's own seed (planet._seed)
+ * @param {Object|null} ctx - CultureContext for this planet's sector
+ * @param {import('../planet/types.js').PlanetSurface} surface
+ * @returns {{seed, ruins: Array<{cultureId, bioform, extinctionCause, pos}>}}
+ */
+export function generatePlanetRuins(seed, ctx, surface) {
+  const ruinSeed = childSeed(seed, 'ruins');
+  if (!ctx || !ctx.formerClaims || !ctx.formerClaims.length) return { seed: ruinSeed, ruins: [] };
+
+  const rng = new PRNG(ruinSeed);
+  if (!rng.p(0.3)) return { seed: ruinSeed, ruins: [] };
+
+  const claim = rng.pick(ctx.formerClaims);
+  const cell = surface.cells && surface.cells.length ? pickSiteCell(surface.cells, rng) : null;
+  if (!cell) return { seed: ruinSeed, ruins: [] };
+
+  return {
+    seed: ruinSeed,
+    ruins: [{ cultureId: claim.cultureId, bioform: claim.bioform, extinctionCause: claim.extinctionCause, pos: { x: cell.x, y: cell.y } }]
+  };
 }
 
 /** Stellar megastructures (§13.0b) — attach to the star, shared by the whole system. */

@@ -75,37 +75,48 @@ function sitesFromHabitats(habitats, parentCell, localCells, seed) {
   });
 }
 
-// A region with no live habitat can still hold a ruin — flavored by a former
-// claimant's bioform/TL/extinctionCause (§13.1), not invented from nothing.
-// Not every such region shows one (0.3 chance) — a dead culture's whole former
-// territory being wall-to-wall ruins would read as noise, not history.
-function ruinSiteFromLocalCells(seed, localCells, ctx) {
-  if (!ctx || !ctx.formerClaims || !ctx.formerClaims.length || !localCells.length) return [];
-  const rng = new PRNG(childSeed(seed, 'ruins'));
-  if (!rng.p(0.3)) return [];
+// `ruins` is the planet's full ruin list (population/habitation.js's
+// generatePlanetRuins output, unfiltered) — a ruin belongs to THIS region if
+// its `pos` is that literal parent surface cell, same exact-match test
+// sitesFromHabitats uses (generatePlanetRuins's pickSiteCell copies a surface
+// cell's x/y verbatim too). The roll of WHETHER a ruin exists at all, and
+// WHICH cell it lands on, happens once at the planet level now (so the
+// hemisphere view can show it before any region is entered) — this only
+// resolves it to a local in-region position, it never re-rolls.
+function ruinSitesFromPlanetRuins(ruins, parentCell, localCells, seed) {
+  const matched = ruins.filter(r => r.pos &&
+    Math.abs(r.pos.x - parentCell.x) < 1e-6 && Math.abs(r.pos.y - parentCell.y) < 1e-6);
+  if (!matched.length) return [];
 
-  const claim = rng.pick(ctx.formerClaims);
-  const best = pickLocalCell(localCells, rng);
-  if (!best) return [];
-
-  return [{
-    kind: 'ruin', x: best.x, y: best.y,
-    cultureId: claim.cultureId, bioform: claim.bioform, extinctionCause: claim.extinctionCause
-  }];
+  return matched.map((r, i) => {
+    const local = pickLocalCell(localCells, new PRNG(childSeed(seed, 'ruin-placement', i)));
+    return {
+      kind: 'ruin', x: local ? local.x : 0, y: local ? local.y : 0,
+      cultureId: r.cultureId, bioform: r.bioform, extinctionCause: r.extinctionCause
+    };
+  });
 }
 
 // Real sites if habitation data was wired in (even an empty array counts —
-// "no habitats landed here" still means don't invent placeholder ones); a
-// possible ruin if this region's parent cell falls in formerly-claimed
-// territory; the old invented heuristic ONLY as a last resort when no
-// ctx/habitats exist at all (a caller that hasn't wired the population layer
-// yet — e.g. a standalone test — still gets a renderable region, not an empty one).
+// "no habitats landed here" still means don't invent placeholder ones), plus
+// any pre-rolled ruin that lands on this exact cell; the old invented
+// heuristic ONLY as a last resort when no ctx/habitats exist at all (a caller
+// that hasn't wired the population layer yet — e.g. a standalone test — still
+// gets a renderable region, not an empty one). Every site gets `tl` stamped
+// from this region's ctx (one culture per region, so one TL for all of it) —
+// rogue/region.js's sprawl-radius calculation needs it and has no other way
+// to reach ctx itself (renderers only ever see the generated data object).
 function resolveSites(regionSeed, parentCell, localCells, opts) {
+  let sites;
   if (opts.habitats != null) {
     const real = sitesFromHabitats(opts.habitats, parentCell, localCells, regionSeed);
-    return real.length ? real : ruinSiteFromLocalCells(regionSeed, localCells, opts.ctx);
+    const ruins = opts.ruins != null ? ruinSitesFromPlanetRuins(opts.ruins, parentCell, localCells, regionSeed) : [];
+    sites = [...real, ...ruins];
+  } else {
+    sites = pickSites(regionSeed, localCells, opts);
   }
-  return pickSites(regionSeed, localCells, opts);
+  const tl = opts.ctx ? opts.ctx.tl : null;
+  return sites.map(s => ({ ...s, tl }));
 }
 
 // A fresh small local noise field for moisture ONLY (0..1 raw, the exact input
@@ -129,10 +140,17 @@ function localMoistureRaw(noise, x, y) {
  *
  * @param {import('./types.js').PlanetSurface} surface
  * @param {number} cellIndex - index into surface.cells
- * @param {{sizeKm?: number, cells?: number, habitats?: Array, ctx?: Object}} [opts] -
- *   `habitats` is the planet's full habitat list (population/habitation.js);
- *   `ctx` is that planet's CultureContext (population/context.js), used for
- *   ruin flavor when no habitat lands in this specific region.
+ * @param {{sizeKm?: number, cells?: number, habitats?: Array, ruins?: Array, ctx?: Object, baseColor?: string|Array}} [opts] -
+ *   `habitats` is the planet's full habitat list (population/habitation.js's
+ *   generatePlanetHabitation); `ruins` is its full ruin list
+ *   (generatePlanetRuins) — both matched to THIS region by exact parent-cell
+ *   position. `ctx` is that planet's CultureContext, stamped onto every
+ *   resolved site as `.tl` (rogue/region.js's sprawl-radius calculation).
+ *   `baseColor` is the parent planet's own color (galaxy/planet.js) — passed
+ *   straight through as `.baseColor` on the returned region, alongside
+ *   `.type` (== surface.type), so rogue/region.js can render a non-habitable
+ *   region with the same elevation-binned shading its hemisphere view uses
+ *   (elevation-color.js) instead of a biome palette lookup.
  */
 export async function generateRegion(surface, cellIndex, opts = {}) {
   const parentCell = surface.cells[cellIndex];
@@ -180,6 +198,8 @@ export async function generateRegion(surface, cellIndex, opts = {}) {
   return {
     seed: regionSeed,
     cellIndex,
+    type: surface.type,
+    baseColor: opts.baseColor,
     lon: parentCell.x,
     lat: parentCell.y,
     sideKm,
