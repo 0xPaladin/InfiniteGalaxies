@@ -28,8 +28,9 @@ their extinction cause (died-out vs. transcended) — or, in untouched space, by
 that predates anything the live simulation ever modeled.
 
 See `VISION.md` for the original target experience, `IMPLEMENTATION_PLAN.md` for the phased build
-plan (galaxy → region), and `POPULATION_PLAN.md` for the culture simulation specifically. This file
-is the practical "what is this and how do I use it" doc.
+plan (galaxy → region, plus §11's rework of region generation into a seamless, traversable
+continuous field), and `POPULATION_PLAN.md` for the culture simulation specifically. This file is
+the practical "what is this and how do I use it" doc.
 
 > **History note:** the project originally rendered in 3D with Three.js. That renderer was removed
 > once the ASCII version covered the same ground — it's still recoverable from the `pre-3d-removal`
@@ -91,20 +92,30 @@ possible ruin, and possible native culture gets a marker glyph at its actual sur
 on whichever hemisphere it's actually facing, so a settled/haunted/inhabited world reads as such
 before you drill into any one region — and clicking that exact tile is guaranteed to show the same
 content the hemisphere promised, never a re-roll that might disagree. Click a cell to drill into
-its **region** — every surface cell IS a region (an equal-area square, its side length
-honest-measured from the cell's local density, so tiny moons get small regions and huge planets
-don't). Each region's terrain elevation ramps from that cell's own value to its 8 neighbors' at the
-edges/corners, with fine detail from 3D noise (seam-continuous across all boundaries), colored the
-same way the hemisphere view colors that planet type (AFMG biome / elevation-binned / — gas giants
-have no region). Generated via the vendored AFMG engine for geologically-plausible shapes. Shows
-real **habitats** (settlements, outposts, cities, orbital stations, megastructures — or ruins if a
-former culture once held this exact spot) with actual populations, and **features** (mountain
-peaks, water, rivers, coastlines). A populated site sprawls across a filled disc of tiles around
-its center instead of a single glyph — radius scales with `log10(population)` but shrinks as the
-owning culture's TL rises (an arcology-era city reads noticeably more compact than a pre-industrial
-town of the same size, roughly half the footprint by TL 5.9 vs TL 4.0). Deep-space stations and
-capital ships also appear as separate glyphs in the sector view. Gas giants have no surface to
-drill into — click a moon (rendered beneath the hemispheres, orbital-scatter style) instead.
+its **region** — a genuine zoom into that exact spot, not a same-looking-everywhere reconstruction:
+a fixed 500km × 500km window at 2km/tile (250×250 tiles), centered exactly on the lon/lat you
+clicked, sampled straight out of a continuous planet-wide terrain field (`planet/field.js`) rather
+than generated fresh per click. Two regions anywhere on the same planet — adjacent, overlapping, or
+clicked minutes apart — agree exactly on the physical ground they share, because they're reading the
+same function, not running independent simulations that happen to be stitched at the edges. Colored
+the same way the hemisphere view colors that planet type (real AFMG biome for habitable worlds,
+elevation-binned for everything else). Local hydrology (`planet/hydrology-local.js`) carves real
+streams, rivers, and ponds at 2km resolution — the small-scale water a planet-wide simulation alone
+would never produce — while staying consistent with planet-scale drainage
+(`planet/hydrology-macro.js`, computed once per planet and shared by every region cut from it): a
+major river crossing a region boundary sits in the exact same place on both sides. Shows real
+**habitats** (settlements, outposts, cities, orbital stations, megastructures — or ruins if a former
+culture once held this exact spot) with actual populations. A populated site sprawls across a
+filled disc of tiles around its center instead of a single glyph — radius scales with
+`log10(population)` but shrinks as the owning culture's TL rises (an arcology-era city reads
+noticeably more compact than a pre-industrial town of the same size, roughly half the footprint by
+TL 5.9 vs TL 4.0). Deep-space stations and capital ships also appear as separate glyphs in the
+sector view. **Walk to the next region** with the GUI panel's compass buttons (▲▼◂▸) — traversal
+re-centers the window and regenerates from the same continuous field, so crossing into the next
+region is seamless by construction rather than a jump-cut to unrelated terrain; a brief zoom
+animation on the display marks each descent or step so it reads as movement, not a scene change.
+Gas giants have no surface to drill into — click a moon (rendered beneath the hemispheres,
+orbital-scatter style) instead.
 
 **Finding content quickly:** hunting for the one system or planet with something on it, glyph by
 glyph, doesn't scale once a sector holds 100+ systems. The sector view's GUI panel shows a "Systems
@@ -121,17 +132,16 @@ there anything here"), so they work instantly even on systems/planets nobody's v
 |---|---|
 | Descend | Click a sector / star / planet surface cell / region-terrain tile |
 | Go back up one level | `Escape`, or the **Back** button in the GUI panel |
+| Walk to the next region | **▲ North / ▼ South / ◂ West / East ▸** in the GUI panel (region view) — re-centers the same continuous field, seamlessly |
 | Jump to the next/prev system or planet with content | **◂ Prev / Next content system ▸** (sector view) / **◂ Prev / Next habitat planet ▸** (system view) in the GUI panel |
 | Step the culture simulation forward/back | **Step Forward ▸** / **◂ Step Back** in the GUI panel — no ceiling; stepping past what's been computed so far extends the simulation live instead of recomputing from scratch. Sector content is now a function of the current step, so stepping while below the galaxy view drops you back to it (a sector generated at one step is stale the moment the step changes) |
 | New galaxy | **New Galaxy** in the GUI panel (uses a fresh random seed) |
 | Save / Load / Delete Save | GUI panel buttons |
 
-Region displays use fixed 2km-per-tile resolution, so a small region (say, 40km side) renders at
-20×20 tiles while a large one (450km) fills 225×225 tiles, keeping fine detail legible without
-over-rendering tiny regions into a sparsely-populated grid. The terrain is fully rasterized via a
-multi-source BFS fill: even though the underlying AFMG mesh is capped at 25k cells (for generation
-speed), every display tile gets painted from the nearest source cell, guaranteeing 100% coverage
-with no black areas.
+Region displays use a fixed 500km window at 2km-per-tile resolution — always 250×250 tiles,
+regardless of body size — because the region is a window onto a continuous field (see below), not a
+per-click generation that needs to be sized to fit. Every tile is sampled directly, so there's no
+missing-coverage case to patch and nothing to rasterize from a sparser source mesh.
 
 The right-hand **GUI panel** (via [lil-gui](https://lil-gui.georgealways.com/)) also shows live
 info for whatever you're currently looking at (star count, spectral class, planet HI rating, region
@@ -165,7 +175,7 @@ plain scripts or loaded from CDN via an import map in `index.html`:
 | [lil-gui](https://lil-gui.georgealways.com/) | The control/info panel (loaded from CDN via ESM `import`) |
 | [localForage](https://localforage.github.io/localForage/) | Browser-storage persistence (seed + path only) |
 | [aleaPRNG](https://github.com/macmcmeans/aleaPRNG) | The seeded RNG every generator is built on |
-| [AFMGData](https://github.com/0xPaladin/AFMGData) (vendored, `lib/afmg/`) | Terrain/hydrology simulation, used for EVERY planet type's regions now (not just habitable worlds) — see `docs/afmg-integration.md` |
+| [AFMGData](https://github.com/0xPaladin/AFMGData) (vendored, `lib/afmg/`) | Habitable *surface* (planet-scale) generation only — see `docs/afmg-integration.md`. No longer used for regions: region terrain/hydrology is generated in-house now (`planet/field.js` + `planet/hydrology-{macro,local}.js`), retired for the reasons in `IMPLEMENTATION_PLAN.md` §11 |
 | tachyons.css | Base CSS utility classes |
 
 AFMGData brings its own CDN dependencies (d3, alea, simplex-noise, delaunator, polylabel,
@@ -192,12 +202,27 @@ src/
                                 from one that has any) into the plain "system spec" list
                                 generateSector() actually builds systems from
     planet/                 planet-surface generators (5 in-house types + AFMG habitable adapter)
-                              - cell-terrain.js: per-cell custom heightmap generator; compass-aligned
-                                ramp from cell's own elevation to neighbors' + 3D-noise detail
-                              - sphere-geo.js: bearing/distance math, equal-area square sizing from
-                                local density, dynamic cell count scaled to target region size
-                              - region.js: per-cell region generator (every surface cell is one region)
-                              - profiles.js: each in-house type's own biome/moisture/temp logic
+                              - field.js: continuous position -> elevation/climate/biome field
+                                (IMPLEMENTATION_PLAN.md §11.1) — analytic for in-house types, a
+                                compact-support-kernel interpolation of surface.cells for habitable;
+                                what makes a region a genuine zoom instead of a fresh reconstruction
+                              - hydrology-macro.js: planet-scale drainage (flow direction, flux,
+                                bounded lake-filling) on the surface cell mesh, computed once and
+                                shared by every region generated from that surface (§11.2 Layer 1)
+                              - hydrology-local.js: region-scale D8 drainage on field.js's fine
+                                heightmap (window+halo, cropped) — real streams/ponds/tributaries at
+                                2km resolution, exactly seam-consistent with neighboring regions and
+                                with hydrology-macro's continental rivers (§11.2 Layer 2)
+                              - region.js: builds one region — a fixed 500km window centered on a
+                                clicked cell (or an arbitrary lon/lat for traversal) — from field.js
+                                + both hydrology layers; no longer touches AFMG at all
+                              - sphere-geo.js: bearing/distance/great-circle math shared by the above
+                              - cell-terrain.js / afmg-adapter.js's generateCellRegion: superseded by
+                                the above (§11.3) and no longer called by anything — left in place,
+                                not deleted, pending a cleanup pass
+                              - profiles.js: each in-house type's own biome/moisture/temp logic, plus
+                                WATER_BIOMES (which biomes are a body of liquid/lava/acid and so keep
+                                a fixed color instead of elevation shading)
     population/              the culture / Game-of-Life simulation + habitat placement
                               - sim.js: the main simulation with TL/bioform/trait evolution
                               - bioform.js: 6 bioforms, affinity table (which worlds each prefers)
@@ -272,69 +297,81 @@ object; none of them draw anything.
 |---|---|---|
 | `generateSurface` | `async (planet, opts)` | a `PlanetSurface`: `{seed, type, bounds, cells: [{x, y, elev, temp, moisture, biome}], palette}` — `type` is one of `rocky \| icy \| hostile \| barren \| airless-moon \| habitable \| gas giant`. Gas giants get real (much coarser — see "Dynamic surface cell count" below) surface cells now too, position-only (no elevation/biome), for the hemisphere view's latitude-band coloring and so `gas mine`/`cloud city` habitats have somewhere real to be sited |
 | `classify` | `(planet)` | which of those types a planet resolves to, from its existing `HI`/temperature/atmosphere fields |
-| `generateRegion` | `async (surface, cellIndex, opts)` | one surface cell's local region: `{seed, cellIndex, type, baseColor, lon, lat, sideKm, bounds, cells, features, sites, palette}` — bounds are an equal-area square (side length measured from the cell's own k-nearest-neighbor density, so it's honest about real local spacing, not a flat ~100km claim). Terrain elevation ramps from this cell's own value to its 8 cardinal neighbors' at the region's edges/corners; fine detail layered via 3D-sphere-sampled noise (exactly seam-continuous across all region boundaries). `opts.habitats`/`opts.ruins`/`opts.ctx` drive site placement — both habitat and ruin positions are resolved once at the PLANET level (see `generatePlanetHabitation`/`generatePlanetRuins` below) and matched here by exact cell position, never re-rolled, so the region always matches whatever the hemisphere view already showed. `opts.baseColor` passes through as `.baseColor` (paired with `.type`) for rogue/region.js's elevation shading. Every resolved site also carries `.tl` (from `opts.ctx`), used by the region renderer's population-sprawl radius. |
+| `generateRegion` | `async (surface, cellIndex, opts)` | a fixed 500km × 500km window (250×250 tiles @ 2km/tile) centered exactly on `surface.cells[cellIndex]`'s own lon/lat — a real zoom into that spot, not a reconstruction: `{seed, cellIndex, type, baseColor, lon, lat, sideKm, bounds, cells: [{x, y, elev, temp, moisture, biome, water}], features: [], sites, palette}`. `cells[].water` is `'stream'\|'river'\|'pond'\|null` from local hydrology. `opts.habitats`/`opts.ruins`/`opts.ctx` drive site placement — both habitat and ruin positions are resolved once at the PLANET level (`generatePlanetHabitation`/`generatePlanetRuins`) and matched here by exact cell position, never re-rolled, so the region always matches whatever the hemisphere view already showed. `opts.baseColor` passes through as `.baseColor` (paired with `.type`) for elevation shading. Every resolved site also carries `.tl` (from `opts.ctx`), used by the region renderer's population-sprawl radius. |
+| `generateRegionAt` | `async (surface, lon, lat, opts)` | same as `generateRegion`, but centered on an arbitrary lon/lat instead of a specific surface cell — the traversal entry point (`_panRegion`, rogue.js); `cellIndex` comes back `null` since it isn't tied to one cell, so habitat/ruin site matching is skipped for it |
 | `regionCellIndexFor` | `(surface, x, y)` | which surface cell (by index) a clicked point is nearest to |
+| `buildFieldSampler` | `(surface, centerLon, centerLat, windowKm, haloKm)` *(planet/field.js)* | `{heightAt(lon,lat), climateAt(lon,lat,elev), biomeAt(elev,moisture,temp)}` — the continuous field a region (or its hydrology) samples from. In-house types evaluate the same analytic noise `buildSurfaceCells` used, at whatever resolution asked; habitable interpolates `surface.cells` with a 700km compact-support kernel. Verified exactly seam-consistent between overlapping windows (0 disagreement, both surface families) |
+| `computeMacroHydrology` / `macroHydrologyFor` | `(surface)` *(planet/hydrology-macro.js)* | `{flowTo, flux, lakeId, neighbors}` — planet-scale drainage on a k-nearest-neighbor graph over `surface.cells`; `macroHydrologyFor` memoizes it on the surface object (`surface._hydrology`) so it's computed once and shared by every region cut from that planet |
+| `computeLocalHydrology` | `(surface, sampler, centerLon, centerLat, windowKm, haloKm, kmPerTile)` *(planet/hydrology-local.js)* | fine D8 drainage on a window+halo heightmap, cropped to the window — real ponds/streams/tributaries at tile resolution. A nearby macro-flux river adds a smooth, continuous rainfall boost near its course (not a point injection — that broke exactness near drainage divides) so a region's local hydrology stays connected to the planet's continental rivers. Verified exactly seam-consistent (0 disagreement across 50,000 compared tile pairs) |
 
-Every planet type's regions now route through the vendored AFMGData generator (for its
-geologically-plausible terrain shape) via a custom heightmap function (`cell-terrain.js`),
-not a pre-baked template. Non-habitable types (rocky/icy/hostile/barren/airless-moon) then
-discard AFMG's own Earth-biome classification and re-derive biome/moisture through that
-type's own calibrated profile (`profiles.js`) instead — see `region.js`'s comments for why.
-Surface generation itself (not regions) is unchanged: habitable surfaces still route through
-AFMGData, the other five types are still generated in-house from seeded value noise.
+**Regions no longer route through AFMG at all (`IMPLEMENTATION_PLAN.md` §11).** They used to —
+generated per click via a custom heightmap fed into AFMG's region-mode generator — but that had
+five compounding problems, all measured rather than assumed: the region wasn't actually centered on
+the clicked cell (a coordinate-box bug), adjacent regions didn't tile (geometry mismatch: ~72% of
+boundaries left a gap, ~22% overlapped), a third of region-pairs couldn't agree on being neighbors
+even in principle, AFMG mutated heights post-generation with no knowledge of neighboring regions
+(lake carving, river downcutting), and AFMG's `h<20`-is-ocean convention flooded dry non-habitable
+worlds with "ocean" and generated islands on airless rock. See §11.0 for the full writeup. All five
+are fixed by construction in the replacement, not patched:
 
-**Habitable regions now bias their biome toward the parent surface cell's actual climate:**
-without this, a region's biome came entirely from AFMG's own from-scratch regional climate
-sim, blind to what the parent cell actually was — clicking a forest surface cell could just as
-easily generate a desert region. Now the region rescales its moisture toward the parent cell's
-actual moisture (from the planet-scale simulation), then reclassifies biome via AFMG's own
-moisture × temperature matrix. The result is a region that predominantly comes out forest when
-clicked from a forest tile, while still preserving AFMG's per-cell noise-driven local variation
-(a patch of grassland inside a forest region, etc.) rather than a flat, artificial override.
+- **`planet/field.js`** — terrain as a *pure function of position*, not a per-click generation.
+  Two overlapping windows sampling the same physical point get the exact same answer, which is what
+  makes tiling/traversal trivial instead of something to engineer at the edges. In-house types
+  evaluate the identical analytic noise function `buildSurfaceCells` uses (just at finer spacing);
+  habitable interpolates the AFMG-generated `surface.cells` with a compact-support kernel (a cell
+  contributes nothing beyond 700km) — verified exact (0 disagreement) between two overlapping
+  windows for both. A region-local 3D-sphere-sampled detail layer sits on top for the actual terrain
+  shape (the macro field alone only varies ~3% of its total range across a 500km span — real, but not
+  enough texture on its own), amplitude-scaled to a *snapped coarse position bucket* rather than each
+  window's own center — an earlier per-window version measurably broke exactness (0.42 units of
+  seam disagreement) purely from two windows estimating slightly different local relief for the same
+  neighborhood.
+- **`planet/hydrology-macro.js` + `planet/hydrology-local.js`** — two-layer drainage (§11.2).
+  Local D8 flow accumulation on field.js's fine heightmap reproduces true planet-scale drainage
+  exactly for any watershed under ~4000km² (measured: 99–100% exact match against a 3000km ground
+  truth for anything under 200km², 92% up to 4000km²) — which is nearly everything a 500km region
+  ever needs, so ponds/streams/tributaries are genuinely locally generated, not inherited from a
+  coarse planet-wide pass. Only real continental rivers need help from the macro layer (computed
+  once per planet, shared by every region): a nearby major river adds a smooth, continuous rainfall
+  boost near its course (a point injection was tried first and measurably broke exactness near local
+  drainage divides — a smooth field doesn't have that failure mode), so a trunk river sits in the
+  same physical place on both sides of a region boundary while its tributaries are still generated
+  locally.
+- **Walking to the next region** (`generateRegionAt`, the GUI panel's compass buttons) re-centers
+  the same continuous field rather than generating something new and hoping it lines up — verified
+  exact agreement at the overlap band between a region and the one it steps to.
 
-**Empty-shoreline lakes no longer crash the generator:** a pre-existing bug in the vendored
-AFMG code threw when a lake's shoreline array was empty (no land cell touches its boundary) —
-which is now common on per-cell custom heightmaps that regularly produce small land patches
-entirely surrounded by ocean. The crash occurred inside `Lakes.defineClimateData()`, called
-from `Rivers.generate()`, matching the "error at rivers" symptom. Fixed: an empty shoreline
-now correctly means "no land path to an outlet", so the lake is treated as closed instead of
-crashing the whole region generation.
+A real performance bug surfaced along the way: the vendored `simplex-noise` library measured ~36×
+slower per call across a real geographic span vs. near-identical points (1.4s vs 50.2s for 160k
+calls) — some internal locality effect in the library, not something worth chasing further. Sampling
+the detail-noise layer at full 2km resolution made one region take ~18–20s. Fixed by evaluating that
+layer on a coarse, globally-aligned lattice (shared across overlapping windows, so exactness isn't
+affected) and bilinearly interpolating — down to ~3–5s per region. Real headroom is still left
+there (numeric lattice keys instead of string-keyed Maps, a Web Worker) but wasn't pursued further.
 
-**Fully-open-ocean regions no longer crash either:** a second, unrelated bug hit when the
-*entire* region was deep water with no coastline anywhere in it (e.g. clicking an open-ocean
-surface cell) — AFMG's packing step deliberately drops "deep ocean" points as a performance
-optimization for its usual continent-scale maps, which left zero cells to pack and crashed a
-few steps later for the same underlying reason (`pack.features` never got set). Fixed by
-falling back to packing the raw grid unfiltered whenever the coastal-proximity filter would
-otherwise leave nothing at all — the region now correctly renders as solid water.
+Non-habitable types (rocky/icy/hostile/barren/airless-moon) still re-derive biome/moisture through
+their own calibrated profile (`profiles.js`) rather than AFMG's Earth-biome classifier — unrelated
+to the AFMG-retirement above, just still true. **Habitable regions still bias their biome toward the
+parent surface cell's actual climate**, though this now happens implicitly: field.js's
+compact-support kernel weights nearby cells (including the exact clicked cell, at zero distance)
+far more heavily than distant ones, so a region generated from a forest tile predominantly comes out
+forest without a separate bias step. `WATER_BIOMES` (`profiles.js`) — ice sheets, lava fields, acid
+lowlands — are the one exception to elevation-binned shading: those keep their fixed palette color
+regardless of elevation, the same way a habitable world's oceans aren't elevation-shaded either.
 
-**Surface cells were silently missing temp/moisture:** `PlanetSurface.cells[].temp` and
-`.moisture` were reading a field (`pack.cells.temp`/`.prec`) that doesn't exist on AFMG's
-packed cell set — that data lives on the finer simulation grid instead, addressed indirectly
-through a grid-reference index. The bug was silent (a `?:` guard just returned `null`), so
-every surface cell's temp/moisture came back empty, which is also why the biome-bias fix above
-had nothing real to bias with until this was found and fixed.
+**Known limitations:** `region.features` is always `[]` now (AFMG's peak/coastline detection had no
+replacement built — water is on `cells[].water` directly instead, which is how it's actually
+rendered). No window-size clamping on very small bodies yet, so a 500km window on a similarly-sized
+body overlaps itself heavily. A region reached by walking (not a direct cell click) doesn't survive
+a save/reload (`cellIndex: null` — guarded against crashing, not against losing the pan position).
 
-#### Region heightmap generation (`cell-terrain.js`)
-
-Each region's elevation is built in two layers: a coarse "ramp" from the surface cell's own
-elevation to its 8 cardinal neighbors' at the region's edges and corners (so two adjacent
-regions agree exactly at the shared anchor points), plus fine detail from 3D fractal noise
-sampled in the planet's real sphere-space (making this layer exactly seam-continuous
-everywhere, regardless of region boundaries). The noise amplitude auto-scales to the local
-relief, so flat cells stay flat and rugged neighborhoods stay rugged. Cardinal neighbors are
-found via compass-sector bucketing (one nearest per 45° wedge), making the ramp
-geographically plausible even on irregular point clouds (Fibonacci-sphere habitable surfaces
-and jittered lon/lat in-house grids alike).
-
-#### Equal-area square sizing
-
-A region's side length (km) is measured from the cell's k-nearest-neighbor local density —
-standard point-process technique, robust regardless of how the point cloud is laid out. This
-is what makes the sizing *honest*: a lon/lat jittered grid's equatorial cells are ~3× larger
-than its polar cells in real km, and the sizing reflects that. Every region's bounds are an
-actual equal-area square centered on the cell, not a flat ~100km claim that ignored latitude
-compression.
+> **Superseded:** regions used to size themselves per-cell (an equal-area square measured from local
+> point density, `sphere-geo.js`'s k-nearest-neighbor technique) so sizing stayed honest across a
+> jittered, unevenly-spaced point cloud. `IMPLEMENTATION_PLAN.md` §11 replaced that with a **fixed**
+> 500km window for every region regardless of body size — once terrain is a continuous field rather
+> than a per-cell reconstruction, there's no per-cell density left to size against, and nothing left
+> for a variable size to serve (see §11.1). `sphere-geo.js`'s distance/bearing math is still used
+> (by field.js's kernel gather and the hydrology layers); the density-based sizing itself is gone.
 
 #### Dynamic surface cell count
 

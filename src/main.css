@@ -180,3 +180,15 @@ body {
 .dropdown:focus .dropdown-content {
   display: block;
 }
+/* Region entry "zoom in" cue (IMPLEMENTATION_PLAN.md §11.4 item 8) — a brief
+   scale+fade so descending into a region reads as zooming into that spot on
+   the planet, not an instant cut to unrelated content. Re-triggered by
+   toggling the class off/on in rogue.js, since a repeated class add doesn't
+   restart a CSS animation on its own. */
+#display.region-zoom-in {
+  animation: region-zoom-in 320ms ease-out;
+}
+@keyframes region-zoom-in {
+  from { transform: scale(0.85); opacity: 0.3; }
+  to { transform: scale(1); opacity: 1; }
+}

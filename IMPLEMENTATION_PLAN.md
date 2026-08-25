@@ -7,6 +7,11 @@
 > including** the Phase 5 population effort. Phase 5 hooks are designed in (see §8) so the Conway sim can
 > be dropped in without reworking the seed chain, but no population simulation is built here.
 >
+> **§11 was added later.** Phases 1–6 are built; §11 is the Phase 7 plan for reworking the planet →
+> region zoom so it is genuinely seamless and traversable. It supersedes §6.1's "sub-sampled from the
+> parent cell" terrain model and the equal-area-square region bounds that grew out of it. Everything
+> §0–§10 says about the generator/renderer split and the seed chain still holds unchanged.
+>
 > **Buildings are cut from this plan's scope entirely** — see §0. They require a population signature to
 > place and size meaningfully, and that signature doesn't exist until Phase 5. Building this plan builds
 > nothing that would need to be thrown away or reworked once Phase 5 lands.
@@ -350,6 +355,11 @@ follow-up plan, once `populationOf(region)` (§8) is real.
 
 ### 6.1 Region generation
 
+> **Superseded in part by §11 (Phase 7).** The terrain model below — "sub-sampled from the parent
+> planet's nearest cell(s)" plus local detail noise, inside equal-area-square bounds — is what shipped,
+> and it is what §11 replaces with a continuous position→elevation field and a fixed window. The seed
+> chain, the data-object shape, and the generator/renderer split described here are unchanged.
+
 - `regionSeed = coordSeed(planetSeed, 'region', rx, ry)`.
 - **New: `src/engine/planet/region.js`** — `async generateRegion(surface, rx, ry)` → a plain data object
   (`async` for the same reason as `generateSurface`, §4.2 — the AFMG branch genuinely awaits, the
@@ -458,3 +468,200 @@ rendering, and richer-than-ASCII visuals.
 2. **AFMGData vendoring**: `lib/afmg/` vendored copy vs. git submodule. *Recommendation: vendor.*
 3. **`src/engine/region/region.js`** (existing fantasy region/faction generator): harvest tables into the
    new PRNG-based module (recommended), or port it wholesale in Phase 4?
+
+---
+
+## 11. Phase 7 — Seamless planet → region zoom
+
+> **Status:** planned, not built. Supersedes §6.1's terrain model (nearest-parent-cell sub-sampling)
+> and the equal-area-square region bounds that followed from it.
+>
+> **Goal:** clicking a planet cell should feel like *zooming into that location on that world*, and
+> adjacent regions should be traversable without visible seams — while still showing the fine hydrology
+> (ponds, streams, tributaries) that only exists at 2km scale.
+
+### 11.0 Why the current model can't get there
+
+Five measured problems. Numbers are from real generated surfaces, not estimates.
+
+**(a) The region isn't centered on the clicked cell — a hard bug.** `cell-terrain.js`'s heightmap
+hardcodes a 0..1000 coordinate box (`u = (px - 500) / 500`), but `setupRegionDimensions`
+(`lib/afmg/src/paths.js`) sets AFMG's graph to `config.width/height`, which we pass as `sizeKm`
+(typically 450). Measured for a 450km region: `grid.points` span `0.96 .. 450`, so `u` spans
+`-1.00 .. -0.10` instead of `-1 .. +1`. The region samples a southwest sliver of the intended control
+lattice, off-center, at ~45% of the claimed linear extent — and the derived lat/lon (and therefore the
+3D sphere noise) are wrong by the same factor.
+
+**(b) The region squares don't tile the sphere.** Regions are equal-area squares of `sideKm`; cells are
+Voronoi polygons at whatever spacing the point cloud gives. Adjacent regions abut only if
+`neighborDistance == sideKm`. Measured over a 3,528-cell surface:
+
+```
+neighborDist / regionSide   min 0.13 | p25 1.00 | median 1.29 | p75 1.65 | max 2.60
+GAPS     (terrain between regions that exists in NO region): 72%
+OVERLAPS (terrain duplicated):                               22%
+```
+
+~6% of boundaries tile correctly. No amount of edge-matching fixes this; the geometry has to change.
+
+**(c) A third of edges can't match even in principle.** The bilinear control lattice agrees across a
+shared edge only if the neighbor relation is symmetric (A's E neighbor is B ⟹ B's W neighbor is A).
+Compass-sector bucketing on an irregular point cloud gives **63% symmetric / 37% asymmetric**.
+
+**(d) AFMG destroys seam continuity after we hand it the heightmap.** The continuity guarantee applies
+to the *input* only. AFMG then mutates heights with no knowledge of neighboring regions:
+`lakes.js` `cells.h[i] = 19` (lake carving) and `river-generators.js` `cells.h[i] -= downcut` (erosion),
+both computed from each region's own internal depressions.
+
+**(e) The dry-world sea level is wrong.** AFMG hardcodes `h < 20` as water. Our elevation scale is
+0–100 planet-wide with no such convention. On a **dry rocky world** (profile `moisture()` returns 0),
+parent cell elevation 59.1: 2,531 region cells sat at exactly 19 (AFMG's lake-carve value) = **9.7% of
+the region flooded**, generating **326 features, mostly `island`** — on airless rock. Sampled regions
+also collapsed to a ~30-unit elevation range (`[19..49]`, `[19..53]`) on a world spanning 0–100, so a
+mountain region and a plains region look nearly identical.
+
+Plus: there is no region traversal at all — `_enterRegion(cellIndex)` pushes a frame and `Escape` is the
+only way out.
+
+### 11.1 The model: terrain as a pure function of position
+
+Replace "region = a square anchored to a cell, edge-matched to its neighbors" with **"region = a window
+onto a continuous planet-wide field."** If terrain is a pure function of position on the sphere, any
+window is automatically consistent with any other. Overlap is harmless (same function, same answer);
+gaps are impossible (the function is defined everywhere). Continuity stops being engineered at the edges
+and becomes a property of the model.
+
+This dissolves (b), (c), and the traversal blocker outright, and makes (a) simpler to fix correctly.
+
+**Fixed window.** 500km at 2km/tile → always 250×250 tiles. Measured nearest-neighbour cell spacing is
+essentially independent of body size (median ~200km, max ~504km across radii 500→15000km), so a 500km
+window is never smaller than the gap to the next cell: full coverage, slight overlap. That is the right
+side of the trade — overlap is free now, gaps would be terrain you could never reach.
+
+**Sampling the macro field.** Two paths:
+
+- **In-house types** (rocky/icy/hostile/barren/airless-moon) have an *analytic* field —
+  `fbm(makeNoise2D(childSeed(seed,'elev')), ...)` in `common.js`. Evaluate that same function at region
+  resolution. Zero interpolation error; genuinely the same planet, zoomed in.
+- **Habitable** worlds have no analytic field (AFMG generates the cells), so interpolate from the cell
+  samples — see below.
+
+**Interpolation must be sample-point-driven with a compactly-supported kernel.** Gathering a fixed set
+of cells per *window* and interpolating among only those reintroduces the seam: a point near the window
+edge may be nearer a cell outside that set, so two windows disagree. Measured with plain k-nearest over
+a gathered set, two overlapping windows disagreed by up to **2.69 elevation units** (falling to ~0.2 with
+a generous margin, never reaching zero).
+
+Using a kernel with **compact support** — a cell contributes nothing beyond `SUPPORT` km — the answer
+depends only on cells within `SUPPORT` of the *sample point*, so any gathered set covering
+`halfDiagonal + SUPPORT` reproduces the global answer exactly:
+
+```
+SUPPORT = 700km  ->  required gather radius 1054km
+  margin 400km  |A|= 8 |B|= 7 : A-vs-B 2.56e-4   (margin < SUPPORT: not guaranteed)
+  margin 700km  |A|=17 |B|=17 : A-vs-B 0.00e+0   <-- provably exact
+  margin 800km  |A|=21 |B|=21 : A-vs-B 0.00e+0   <-- provably exact
+```
+
+Gathering costs a median of 12–20 cells (max ~350 near the poles, where the lon/lat grid crowds) —
+~500k great-circle distances per region against AFMG's 25k grid points. Milliseconds.
+
+### 11.2 Two-layer hydrology
+
+Macro-only hydrology gives big lakes and rivers but loses the ponds, streams and tributaries that make a
+2km-scale view feel real. Those features are *local*, and local hydrology is exactly reproducible.
+
+Measured: local D8 flow accumulation over a continuous height field, compared against a 3000km
+"planetary" ground truth —
+
+```
+TRUE flux bucket              local matches global truth
+  <50    (<=  200 km² watershed)   99-100%
+  50-200 (<=  800 km²)             97%
+  200-1k (<= 4000 km²)             92%
+  1k-5k                            needs macro
+```
+
+At 2km tiles each tile is 4 km² and a 500km region is 250,000 km², so a 4000 km² watershed is **1.6% of
+the region**. Ponds, streams and small tributaries are fully local. Only continental drainage needs the
+planet layer.
+
+**Layer 1 — planet scale, computed once, shared by every region.** Coarse drainage on the surface cell
+mesh: per cell a `flowTo`, accumulated flux, and lake membership/level. Owns sea level, large lakes,
+major river courses. Consistent by construction — there is only one computation.
+
+**Layer 2 — region scale, per region, on window + halo, then cropped.** Fine D8 accumulation on the
+continuous 2km heightmap. Owns ponds (local minima), headwater streams, tributaries.
+
+**The halo is what makes Layer 2 seam-safe.** Two adjacent 500km windows, comparing the shared band:
+
+```
+halo | max flux disagreement | stream-class mismatches | pond mismatches
+  20 |                   158 |                      24 |               6
+  50 |                    34 |                       3 |               0
+ 100 |                     0 |                       0 |               0
+ 200 |                     0 |                       0 |               0
+```
+
+**At a 100km halo: exact** — zero flux disagreement, zero stream misclassification, zero pond mismatch.
+Cost is 350×350 vs 250×250 tiles (~2×); accumulation is a sort plus a linear pass.
+
+**The handoff.** Where Layer 1 says a major river enters the region, inject that flux as a boundary
+condition at that location; local accumulation grows tributaries into it naturally. The trunk river sits
+in the same place in both regions (macro-determined); its tributaries agree across the seam
+(halo-determined). For lakes, the same threshold logic: fill a depression until it overflows **or** until
+the basin exceeds a size cap — under the cap it is a local pond, over it, hand it to macro. That is the
+bounded-support replacement for AFMG's unbounded `resolveDepressions`, which is precisely why the current
+code cannot do this per-region.
+
+**Precipitation** is interpolated from the macro climate field with the same bounded kernel as
+elevation, so flux is rainfall-weighted rather than uniform.
+
+### 11.3 This removes AFMG from the region pipeline
+
+We already replaced AFMG's heightmap. Replacing its hydrology with bounded local drainage leaves it no
+remaining job at region scale. Dropping it there:
+
+- eliminates **(d)** at the root rather than working around it — no more post-hoc height mutation;
+- takes **(e)** with it — no more flooding airless rock and generating islands on it;
+- removes a large dependency from the hot path and makes region generation fully ours and predictable.
+
+AFMG still generates habitable **planet** surfaces, where its climate/biome model earns its keep.
+
+### 11.4 Work items
+
+| # | Item | Notes |
+|---|---|---|
+| 1 | Fix the `u`/`v` box bug | Derive the box from actual graph dims instead of assuming 1000. Independent of everything else; lands immediately. |
+| 2 | `planet/field.js` (new) — continuous position→elevation field | Analytic path for in-house types; bounded-support interpolation for habitable. Pure function of (surface, lon, lat). |
+| 3 | Fixed 500km / 2km window, centered on the clicked cell's lon/lat | Replaces `estimateRegionSideKm` + equal-area-square bounds. `sideKm` stops being load-bearing. |
+| 4 | `planet/hydrology-macro.js` (new) — Layer 1 drainage on the surface mesh | Runs once per planet, cached on the surface. |
+| 5 | `planet/hydrology-local.js` (new) — Layer 2 D8 on window+halo, cropped | ~100 lines. Halo 100km (150 for margin). |
+| 6 | Retire AFMG from `generateCellRegion` | Region generation becomes fully in-house. |
+| 7 | Region traversal | Window center becomes a free (lon, lat) parameter, not "a cell" — walking off an edge re-centers. |
+| 8 | Zoom transition | Visual bridge from the clicked cell to the region so the connection reads. |
+
+### 11.5 Parameters
+
+- **Window:** 500km at 2km/tile (250×250 tiles)
+- **Halo:** 100km measured minimum for exactness; **150km** recommended for margin
+- **Kernel support:** 700km; gather radius = window half-diagonal (354km) + support
+- **Macro/local handoff:** watershed ≈ 1000–4000 km²; below → local, above → macro
+- **Small bodies:** at R=500km cells are ~165km apart, so a 500km window covers ~9 cells and adjacent
+  clicks share ~70% of their terrain. Either clamp the window on small bodies or accept it (arguably
+  correct — a tiny moon *should* feel like you are seeing most of it).
+
+### 11.6 Acceptance
+
+1. A region is centered on the clicked cell's actual lon/lat, at the stated scale (regression test for
+   the `u`/`v` bug: sampled window extent matches the requested window within one tile).
+2. Two adjacent regions sampled over their shared band agree **exactly** on elevation — asserted, not
+   eyeballed.
+3. Same, for flux / stream classification / pond classification.
+4. A major river crossing a region boundary occupies the same physical position in both regions.
+5. No region on a dry world (`profile.moisture()` ≡ 0) contains any cell below the water threshold, and
+   generates zero water features.
+6. Region elevation range tracks the parent neighbourhood's real relief instead of collapsing to a
+   fixed ~30-unit band.
+7. Traversal: walking off a region edge lands in the neighbouring terrain with no discontinuity at the
+   crossing.

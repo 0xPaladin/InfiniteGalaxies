@@ -12,7 +12,7 @@ import { GUI } from 'https://cdn.jsdelivr.net/npm/lil-gui@0.21/+esm';
 import { generateGalaxy } from './engine/galaxy/galaxy_gen.js';
 import { generateSector } from './engine/galaxy/sector.js';
 import { generateSurface, classify } from './engine/planet/types.js';
-import { generateRegion } from './engine/planet/region.js';
+import { generateRegion, generateRegionAt, WINDOW_KM, KM_PER_TILE } from './engine/planet/region.js';
 import { initPopulation, advancePopulation, populationView, buildSnapshotIndex } from './engine/population/sim.js';
 import { cultureContextFor } from './engine/population/context.js';
 import { generatePlanetHabitation, generatePlanetRuins, generateSystemHabitation, planetHasHabitats } from './engine/population/habitation.js';
@@ -130,6 +130,10 @@ class RogueApp {
         // parent level is (re)entered, since the qualifying list itself changes.
         this._contentSystemCursor = -1;
         this._contentPlanetCursor = -1;
+
+        // Guards _panRegion (IMPLEMENTATION_PLAN.md §11.4 item 7) against a
+        // second pan firing while one is already generating.
+        this._panning = false;
     }
 
     get top() { return this.stack[this.stack.length - 1]; }
@@ -424,10 +428,53 @@ class RogueApp {
         const habitats = this.top.habitation ? this.top.habitation.habitats : [];
         const ruins = this.top.ruins ? this.top.ruins.ruins : [];
         const baseColor = this.top.planet ? this.top.planet.color : null;
-        const region = await generateRegion(surface, cellIndex, { habitats, ruins, ctx: this.top.ctx || this.currentCtx, baseColor });
-        this.stack.push({ level: 'region', data: region });
+        const ctx = this.top.ctx || this.currentCtx;
+        const region = await generateRegion(surface, cellIndex, { habitats, ruins, ctx, baseColor });
+        // Carried on the region frame (not just read off the parent planet
+        // frame at push-time) so _panRegion below can regenerate a
+        // traversed-to region with the exact same habitat/ruin/ctx/color
+        // context without needing to reach back into the stack.
+        this.stack.push({ level: 'region', data: region, surface, habitats, ruins, ctx, baseColor });
         this._render();
+        this._triggerRegionZoom();
         this._persist();
+    }
+
+    // IMPLEMENTATION_PLAN.md §11.4 item 7 — region traversal. Walks a compass
+    // step and regenerates there (generateRegionAt, not tied to any one
+    // surface cell) — seamless by the same proof the terrain/hydrology
+    // fields already carry (§11.1/§11.2): the new window samples the
+    // identical continuous field, so there's no discontinuity to cross.
+    // Step distance is WINDOW_KM minus one tile, not a full WINDOW_KM —
+    // regions are sampled corner-aligned (tile i is at its OWN left/bottom
+    // corner, not centered on it), so a bare WINDOW_KM step leaves a
+    // one-tile (2km) sampling gap between two windows' discrete grids even
+    // though the underlying field has no actual gap; stepping one tile
+    // short guarantees a real overlap band instead.
+    async _panRegion(dirLon, dirLat) {
+        if (!this.top || this.top.level !== 'region' || this._panning) return;
+        const { surface, habitats, ruins, ctx, baseColor, data: cur } = this.top;
+        if (!surface) return; // region reached before this frame carried context (e.g. an old save) -- can't pan
+        const R = surface.radius || 6371;
+        const stepKm = WINDOW_KM - KM_PER_TILE;
+        const cosLat = Math.max(0.05, Math.cos(cur.lat * Math.PI / 180));
+        const newLon = ((cur.lon + dirLon * (stepKm / (R * cosLat)) * (180 / Math.PI) + 540) % 360) - 180;
+        const newLat = Math.max(-90, Math.min(90, cur.lat + dirLat * (stepKm / R) * (180 / Math.PI)));
+
+        this._panning = true;
+        toast('Traveling...');
+        try {
+            const region = await generateRegionAt(surface, newLon, newLat, { habitats, ruins, ctx, baseColor });
+            this.stack[this.stack.length - 1] = { level: 'region', data: region, surface, habitats, ruins, ctx, baseColor };
+            this._render();
+            this._triggerRegionZoom();
+            this._persist();
+        } catch (err) {
+            console.error(err);
+            toast('Error: ' + err.message);
+        } finally {
+            this._panning = false;
+        }
     }
 
     // Re-run the current sector's generator with an updated densityScale.
@@ -487,6 +534,10 @@ class RogueApp {
                 if (!moonObj) break;
                 await this._enterPlanet(moonObj);
             } else if (step.level === 'region' && this.top.level === 'planet') {
+                // A traversed-to region (cellIndex: null, _panRegion above)
+                // isn't tied to a surface cell, so there's nothing to
+                // restore it from — stop one level up instead of crashing.
+                if (step.cellIndex == null) break;
                 await this._enterRegion(step.cellIndex);
             } else {
                 break;
@@ -528,6 +579,20 @@ class RogueApp {
         const rotVisible = level !== 'planet';
         $('display').style.display = rotVisible ? 'flex' : 'none';
         this.planetHost.style.display = rotVisible ? 'none' : 'flex';
+    }
+
+    // IMPLEMENTATION_PLAN.md §11.4 item 8 — a brief scale+fade (main.css's
+    // .region-zoom-in) on region entry/pan, so descending reads as zooming
+    // into that spot on the planet rather than an instant cut. Toggled off
+    // then back on (rather than just added) because re-adding a class that's
+    // already present doesn't restart a CSS animation — the forced reflow in
+    // between is what makes it retrigger on every call, not just the first.
+    _triggerRegionZoom() {
+        const el = $('display');
+        if (!el) return;
+        el.classList.remove('region-zoom-in');
+        void el.offsetWidth; // force reflow
+        el.classList.add('region-zoom-in');
     }
 
     _render() {
@@ -586,7 +651,8 @@ class RogueApp {
                 : `${data.type} world — HI ${data.HI}`) + (habCount ? `, ${habCount} habitats` : '') + nativeNote);
         } else if (level === 'region') {
             this.top.index = RogueRegion(data, this.display).index;
-            toast(`Region (${data.lon.toFixed(1)}°,${data.lat.toFixed(1)}°) — ${data.template} — ${data.sites.length} sites`);
+            const waterCount = data.cells.filter(c => c.water).length;
+            toast(`Region (${data.lon.toFixed(1)}°,${data.lat.toFixed(1)}°) — ${data.sites.length} sites${waterCount ? `, ${waterCount} water tiles` : ''}`);
         }
         console.log(this.top);
     }
@@ -670,7 +736,14 @@ class RogueApp {
         } else if (level === 'region') {
             this.infoFolder.add({ v: `${data.lon.toFixed(1)}°, ${data.lat.toFixed(1)}°` }, 'v').name('Coords').disable();
             this.infoFolder.add({ v: data.sites.length }, 'v').name('Sites').disable();
-            this.infoFolder.add({ v: data.features.length }, 'v').name('Features').disable();
+            const waterTiles = data.cells.filter(c => c.water).length;
+            if (waterTiles) this.infoFolder.add({ v: waterTiles }, 'v').name('Water tiles').disable();
+            if (this.top.surface) {
+                this.infoFolder.add({ fn: () => this._panRegion(0, 1) }, 'fn').name('▲ North');
+                this.infoFolder.add({ fn: () => this._panRegion(0, -1) }, 'fn').name('▼ South');
+                this.infoFolder.add({ fn: () => this._panRegion(-1, 0) }, 'fn').name('◂ West');
+                this.infoFolder.add({ fn: () => this._panRegion(1, 0) }, 'fn').name('East ▸');
+            }
         }
     }
 
