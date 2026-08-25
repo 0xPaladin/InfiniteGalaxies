@@ -306,7 +306,7 @@ object; none of them draw anything.
 | `regionCellIndexFor` | `(surface, x, y)` | which surface cell (by index) a clicked point is nearest to |
 | `buildFieldSampler` | `(surface, centerLon, centerLat, windowKm, haloKm)` *(planet/field.js)* | `{heightAt(lon,lat), climateAt(lon,lat,elev), biomeAt(elev,moisture,temp)}` — the continuous field a region (or its hydrology) samples from. In-house types evaluate the same analytic noise `buildSurfaceCells` used, at whatever resolution asked; habitable interpolates `surface.cells` with a 700km compact-support kernel. Verified exactly seam-consistent between overlapping windows (0 disagreement, both surface families) |
 | `computeMacroHydrology` / `macroHydrologyFor` | `(surface)` *(planet/hydrology-macro.js)* | `{flowTo, flux, lakeId, neighbors}` — planet-scale drainage on a k-nearest-neighbor graph over `surface.cells`; `macroHydrologyFor` memoizes it on the surface object (`surface._hydrology`) so it's computed once and shared by every region cut from that planet |
-| `computeLocalHydrology` | `(surface, sampler, centerLon, centerLat, windowKm, haloKm, kmPerTile)` *(planet/hydrology-local.js)* | fine D8 drainage on a window+halo heightmap (after priority-flood depression filling), cropped to the window — real ponds/streams/tributaries at tile resolution. Depression-filled basins (≤400 tiles) read as standing water; anything larger is a routing artifact of the window and drains instead. A nearby macro-flux river adds a smooth, continuous rainfall boost near its course (not a point injection — that broke exactness near drainage divides) so a region's local hydrology stays connected to the planet's continental rivers. Verified nearly seam-consistent: heights to 6.4e-14, water-class 99.91% agreement across overlapping windows. |
+| `computeLocalHydrology` | `(surface, sampler, centerLon, centerLat, windowKm, haloKm, kmPerTile)` *(planet/hydrology-local.js)* | fine D8 drainage on a window+halo heightmap (after priority-flood depression filling), cropped to the window — real ponds/streams/tributaries at tile resolution. Depression-filled basins (≤400 tiles) read as standing water; anything larger is a routing artifact of the window and drains instead. D8 straight-line artifacts (where the direction quantisation to 8 octants creates dead-straight channel runs on smooth slopes) are suppressed via aspect-dithered routing: each cell scores its downhill neighbours by both their steepness and alignment with the continuous downslope aspect of the real terrain (perturbed deterministically per cell), so flow alternates between octants on shallow slopes instead of committing to one. A nearby macro-flux river adds a smooth, continuous rainfall boost near its course (not a point injection — that broke exactness near drainage divides) so a region's local hydrology stays connected to the planet's continental rivers. Verified nearly seam-consistent: heights to 1.4e-12, water-class 94.4% agreement across overlapping windows. |
 
 **Regions no longer route through AFMG at all (`IMPLEMENTATION_PLAN.md` §11).** They used to —
 generated per click via a custom heightmap fed into AFMG's region-mode generator — but that had
@@ -339,13 +339,25 @@ are fixed by construction in the replacement, not patched:
   reproduces true planet-scale drainage exactly for any watershed under ~4000km² (measured: 99–100%
   exact match for anything under 200km², 92% up to 4000km²) — nearly everything a 500km region ever
   needs. Ponds/streams/tributaries are genuinely locally generated, not inherited from a coarse
-  planet-wide pass. Only real continental rivers need help from the macro layer (computed once per
-  planet, shared by every region): a nearby major river adds a smooth, continuous rainfall boost near
-  its course (a point injection was tried first and measurably broke exactness near local drainage
-  divides — a smooth field doesn't have that failure mode), so a trunk river sits in the same
-  physical place on both sides of a region boundary while its tributaries are still generated
-  locally. Verified exactly seam-consistent (heights 6.4e-14, water-class 99.91% agreement) across
-  overlapping windows.
+  planet-wide pass.
+  
+  D8 has a built-in artifact: only 8 possible flow directions means any smooth slope commits every
+  cell in a neighbourhood to the same octant, drawing channels as dead-straight rays. Inside a
+  depression-filled basin (where the synthetic BFS-order gradient is especially smooth), measured
+  18–25% of channel tiles ended up in perfectly straight runs of 20+ tiles, some exceeding 180 tiles,
+  drawn as parallel 45-degree lines that dominated the display. Fixed via aspect-dithered routing:
+  each cell scores every legal downhill neighbour by both its drop and how well it aligns with the
+  continuous downslope aspect of the real terrain (perturbed deterministically per cell by hashing
+  the cell's height — position-pure, not grid-dependent). A slope whose true aspect falls between
+  two octants then alternates between them, turning rays into meanders. Reduces straight runs in
+  20+ range from 23.7–25.5% of channels to 6.4–3.9%, with zero new unresolved pits.
+  
+  Only real continental rivers need help from the macro layer (computed once per planet, shared by
+  every region): a nearby major river adds a smooth, continuous rainfall boost near its course (a
+  point injection was tried first and measurably broke exactness near local drainage divides — a
+  smooth field doesn't have that failure mode), so a trunk river sits in the same physical place on
+  both sides of a region boundary while its tributaries are still generated locally. Verified nearly
+  seam-consistent (heights 1.4e-12, water-class 94.4% agreement) across overlapping windows.
 - **Walking to the next region** (`generateRegionAt`, the GUI panel's compass buttons) re-centers
   the same continuous field rather than generating something new and hoping it lines up — verified
   exact agreement at the overlap band between a region and the one it steps to.
