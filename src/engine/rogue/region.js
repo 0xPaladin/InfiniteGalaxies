@@ -90,12 +90,19 @@ function darken(hex, t) {
   return `#${c(r)}${c(g)}${c(b)}`;
 }
 
+// Region-space `y` is NORTH-positive (region.js builds each tile's lat via
+// hydrology-local.js's offsetLonLat, whose dyKm is north), but screen row 0 is
+// the TOP of the display — so the row index has to be inverted here or the
+// whole region renders south-up while the hemisphere view (rogue/planet.js's
+// d3.geoOrthographic) renders north-up. Getting this wrong put a cell's
+// southeast content in the map's northeast corner. Sites and features route
+// through this same helper, so they flip with the terrain automatically.
 function toGrid(x, y, bounds, width, height) {
   const spanX = (bounds.maxX - bounds.minX) || 1;
   const spanY = (bounds.maxY - bounds.minY) || 1;
   const gx = Math.min(width - 1, Math.max(0, Math.floor(((x - bounds.minX) / spanX) * width)));
   const gy = Math.min(height - 1, Math.max(0, Math.floor(((y - bounds.minY) / spanY) * height)));
-  return [gx, gy];
+  return [gx, height - 1 - gy];
 }
 
 /**
@@ -153,7 +160,8 @@ export function RogueRegion(region, display) {
     const nx = (cell.x - bounds.minX) / spanX;
     const ny = (cell.y - bounds.minY) / spanY;
     const gx = Math.min(width - 1, Math.max(0, Math.floor(nx * width)));
-    const gy = Math.min(height - 1, Math.max(0, Math.floor(ny * height)));
+    // north-up inversion, same as toGrid's — see its comment
+    const gy = height - 1 - Math.min(height - 1, Math.max(0, Math.floor(ny * height)));
     const k = at(gx, gy);
     if (cell.elev > destElev[k]) {
       if (destElev[k] === -Infinity) queue.push(gx, gy); // seed the fill queue once per tile

@@ -24,7 +24,7 @@
 // real 3D position on the sphere, not of which region "owns" it) supplies
 // the actual terrain shape at 2km resolution.
 import { childSeed } from '../seed.js';
-import { makeNoise3D, fbm3D } from './noise.js';
+import { makeFastNoise3D, fbm3D } from './noise.js';
 import { sampleRawField } from './common.js';
 import { greatCircleKm } from './sphere-geo.js';
 import { PROFILES } from './profiles.js';
@@ -35,58 +35,44 @@ export const KERNEL_SUPPORT_KM = 700;
 const _detailNoiseCache = new Map();
 function detailNoiseFor(seed) {
   let n = _detailNoiseCache.get(seed);
-  if (!n) { n = makeNoise3D(childSeed(seed, 'region-detail')); _detailNoiseCache.set(seed, n); }
+  if (!n) { n = makeFastNoise3D(childSeed(seed, 'region-detail')); _detailNoiseCache.set(seed, n); }
   return n;
 }
 
-// The vendored simplex-noise library is measured ~36x slower per call when
-// queried across a real geographic span vs. near-identical points (1.4s vs
-// 50.2s for 160k calls, isolated benchmark) — some internal cache/locality
-// effect, not something worth chasing into the library itself. Evaluating it
-// at full 2km resolution made a single region take ~18s. Fix: evaluate the
-// detail layer on a coarse, GLOBALLY-ALIGNED lon/lat lattice (not aligned to
-// any one window's own origin) and bilinearly interpolate for any finer
-// query point. Global alignment is what keeps this exactly seam-safe: two
-// overlapping windows share the same lattice cells, cached once, so they
-// interpolate from identical corner values. LATTICE_STEP_DEG is chosen well
-// under the detail noise's own tuned wavelength (windowKm/8, e.g. ~62.5km at
-// the 500km default) so the lattice doesn't alias away the texture it's
-// supposed to carry.
-const LATTICE_STEP_DEG = 0.1; // ~11km at the equator
-const _detailLatticeCache = new Map(); // key: `${seed}|${ix}|${iy}` -> raw fbm3D value
+// The detail fbm spans from LARGER than the window down to a few tiles, so a
+// region gets both a regional slope and fine texture out of one coherent
+// multi-scale field (see buildFieldSampler for why the base has to exceed the
+// window). DETAIL_OCTAVE_FLOOR_KM is deliberately ~4 tiles rather than the
+// 2-tile Nyquist limit: at 2 tiles the height field is effectively white noise
+// tile-to-tile, which pits the terrain so densely that depression filling
+// (hydrology-local.js) has to flood a sixth of the window. Four tiles keeps
+// the surface differentiable enough for D8 to trace real channels while still
+// having texture at the scale the region actually renders.
+//
+// An earlier version evaluated this on a coarse 0.1-degree (~11km) lattice and
+// bilinearly interpolated, to dodge how slow the old string-keyed-PRNG
+// makeNoise3D was. That capped resolvable detail at ~22km against a 2km grid,
+// which aliased away the two finest octaves entirely and left the height field
+// so smooth that D8 flow accumulation (hydrology-local.js) ran in straight
+// lines for dozens of tiles at a time — the "90-degree and 45-degree water
+// grid" artifact. makeFastNoise3D removed the reason for the lattice (166ms vs
+// 23.8s for a full 350x350 window), so the detail layer is now sampled
+// directly at full resolution. Seam-exactness is untouched: this is still a
+// pure function of the point's real 3D position on the sphere, which is the
+// property the tiling proof actually rests on — the lattice was never what
+// made it exact.
+const DETAIL_BASE_WINDOWS = 4;   // base wavelength = 4 x windowKm
+const DETAIL_OCTAVE_FLOOR_KM = 8;
 
-function detailLatticeCorner(seed, noise, noiseFreq, ix, iy) {
-  // noiseFreq is included in the key (not just seed/ix/iy) because it's
-  // window-size-dependent — every region uses the same fixed windowKm today
-  // so this never actually varies in practice, but keying on it prevents a
-  // silent cache-poisoning bug if that assumption ever changes (e.g. a
-  // clamped window on a very small body).
-  const key = `${seed}|${noiseFreq.toFixed(3)}|${ix}|${iy}`;
-  let v = _detailLatticeCache.get(key);
-  if (v != null) return v;
-  const lon = ix * LATTICE_STEP_DEG, lat = Math.max(-90, Math.min(90, iy * LATTICE_STEP_DEG));
-  const [sx, sy, sz] = sphereXYZ(lon, lat).map(c => c * noiseFreq);
-  v = fbm3D(noise, sx, sy, sz, 4, 0.5, 1);
-  _detailLatticeCache.set(key, v);
-  return v;
-}
-
-// Bilinear interpolation directly in (lon,lat) space — a coarse approximation
-// near the poles (where a degree of longitude is a much shorter arc), but
-// this only modulates the fine TEXTURE layer, not the macro shape, and every
-// region this could visibly matter for is far from a pole edge case worth
-// the added complexity of a proper local projection here.
-function detailAt(seed, noise, noiseFreq, lon, lat) {
-  const gx = lon / LATTICE_STEP_DEG, gy = lat / LATTICE_STEP_DEG;
-  const x0 = Math.floor(gx), y0 = Math.floor(gy);
-  const tx = gx - x0, ty = gy - y0;
-  const h00 = detailLatticeCorner(seed, noise, noiseFreq, x0, y0);
-  const h10 = detailLatticeCorner(seed, noise, noiseFreq, x0 + 1, y0);
-  const h01 = detailLatticeCorner(seed, noise, noiseFreq, x0, y0 + 1);
-  const h11 = detailLatticeCorner(seed, noise, noiseFreq, x0 + 1, y0 + 1);
-  const top = h00 + (h10 - h00) * tx;
-  const bot = h01 + (h11 - h01) * tx;
-  return top + (bot - top) * ty;
+// fbm-of-value-noise does NOT span 0..1 — measured across 40k samples it runs
+// 0.087..0.896 with p5..p95 of only 0.306..0.682. Treating `detail - 0.5` as a
+// +/-0.5 signal (as this used to) therefore threw away most of the intended
+// amplitude. Dividing the centered value by the measured half-span maps the
+// typical range onto roughly [-1, 1], so `noiseAmp` below means what it says.
+// Clamped because the tails run wider than the p5/p95 span.
+const DETAIL_HALF_SPAN = 0.19;
+function normalizedDetail(raw) {
+  return Math.max(-1.5, Math.min(1.5, (raw - 0.5) / DETAIL_HALF_SPAN));
 }
 
 function sphereXYZ(lonDeg, latDeg) {
@@ -197,15 +183,37 @@ export function buildFieldSampler(surface, centerLon, centerLat, windowKm, haloK
   const sampleMacro = (lon, lat) => macroElevation(surface, lon, lat, nearby, profile);
 
   const detailNoise = detailNoiseFor(surface.seed);
-  const wavelengthKm = Math.max(8, windowKm / 8);
-  const noiseFreq = (2 * Math.PI * R) / wavelengthKm;
+  // Base wavelength is several times the WINDOW, not a fraction of it. When it
+  // was windowKm/8 (~62.5km) the detail layer was a single narrow band, so —
+  // with the macro field varying only ~2 units across a whole window — terrain
+  // came out as a field of ~60km closed bowls with no regional slope for water
+  // to run down. Depression filling then had to flood each bowl, and 16% of a
+  // window classified as pond. Starting above the window size gives every
+  // region a coherent large-scale tilt that flow can follow for hundreds of km,
+  // with the finer octaves supplying texture on top of it.
+  const baseWavelengthKm = Math.max(64, windowKm * DETAIL_BASE_WINDOWS);
+  const noiseFreq = (2 * Math.PI * R) / baseWavelengthKm;
+  // Enough octaves to reach ~4 tiles (see DETAIL_OCTAVE_FLOOR_KM), derived
+  // rather than hardcoded so it stays correct if the window or tile size moves.
+  const octaves = Math.max(4, Math.min(10,
+    Math.round(Math.log2(baseWavelengthKm / DETAIL_OCTAVE_FLOOR_KM)) + 1));
 
   function heightAt(lon, lat) {
     const macro = sampleMacro(lon, lat);
     const relief = bucketRelief(sampleMacro, surface.seed, lon, lat, R);
-    const noiseAmp = Math.min(25, Math.max(3, relief * 0.4));
-    const detail = detailAt(surface.seed, detailNoise, noiseFreq, lon, lat);
-    const h = macro + (detail - 0.5) * noiseAmp;
+    // relief is measured on the deliberately-smooth macro field, so its own
+    // planet-wide spread is small (p5/p50/p95 = 1.8/4.8/11.2 across 612
+    // buckets). The old `max(3, relief * 0.4)` mapping left 79.9% of the
+    // planet pinned at the floor of 3, i.e. the relief term did nothing
+    // almost everywhere and every region came out a ~3-unit-tall plane on a
+    // 0..100 scale. The gain and floor here are set against that measured
+    // distribution instead: a typical (p50) neighbourhood now gets ~10 and a
+    // rugged (p95) one ~25, with the floor engaging only in genuinely flat
+    // country rather than as the default.
+    const noiseAmp = Math.min(30, Math.max(8, relief * 2.2));
+    const [sx, sy, sz] = sphereXYZ(lon, lat);
+    const raw = fbm3D(detailNoise, sx * noiseFreq, sy * noiseFreq, sz * noiseFreq, octaves, 0.5, 1);
+    const h = macro + normalizedDetail(raw) * noiseAmp;
     return Math.max(0, Math.min(100, h));
   }
 

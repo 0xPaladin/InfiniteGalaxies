@@ -1,12 +1,23 @@
 // IMPLEMENTATION_PLAN.md §11.2, Layer 2 — region-scale drainage: ponds,
-// headwater streams, tributaries. Runs D8 flow accumulation on the region's
-// own fine (2km) heightmap, built window+halo then cropped, so it's exactly
-// window-independent the same way field.js's terrain is (verified: 100km
-// halo -> zero flux/pond/stream-class disagreement between two overlapping
-// windows). Major rivers are handed down from hydrology-macro.js as a
-// boundary condition (injected flux at the point they cross into the
-// window) rather than re-derived locally — Layer 1 already decided where
-// continental drainage goes; Layer 2 only grows the local watershed around it.
+// headwater streams, tributaries. Runs depression filling + D8 flow
+// accumulation on the region's own fine (2km) heightmap, built window+halo
+// then cropped. Major rivers are handed down from hydrology-macro.js as a
+// smooth rainfall boost near where continental drainage runs, rather than
+// re-derived locally — Layer 1 already decided where the big water goes;
+// Layer 2 only grows the local watershed around it.
+//
+// Window-independence: the underlying TERRAIN is exactly position-pure
+// (field.js — verified 0.00e+0 across 40k shared points), and so is the
+// macro-river boost. The drainage derived from it is very nearly so, but NOT
+// exactly: priority-flood (see below) is a window-global operation, so a basin
+// whose outlet lies beyond one window's halo fills to a slightly different
+// level than it does in a window that can see that outlet. Measured between
+// two windows offset 200km, over 37500 shared tiles: heights agree to 6.4e-14,
+// water-class agrees on 99.91% of tiles, with flux differing by up to 41% on
+// the ones that disagree. A one-tile traversal step agrees exactly (0/250).
+// That residual is the price of having real drainage networks at all — without
+// depression filling, flow terminates in a local pit within a few tiles and no
+// channels form anywhere (measured: 2540 pits, zero rivers, in one window).
 import { greatCircleKm } from './sphere-geo.js';
 import { macroHydrologyFor } from './hydrology-macro.js';
 
@@ -24,6 +35,100 @@ function gatherNearbyIndices(surface, lon, lat, radiusKm) {
 
 const NEIGHBORS_8 = [[-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1]];
 
+// Minimal binary min-heap over (elevation, index) — only what priorityFlood
+// below needs, so no general-purpose PQ dependency.
+function makeHeap() {
+  const key = [], val = [];
+  return {
+    get size() { return key.length; },
+    push(k, v) {
+      key.push(k); val.push(v);
+      let i = key.length - 1;
+      while (i > 0) {
+        const p = (i - 1) >> 1;
+        if (key[p] <= key[i]) break;
+        [key[p], key[i]] = [key[i], key[p]];
+        [val[p], val[i]] = [val[i], val[p]];
+        i = p;
+      }
+    },
+    pop() {
+      const topK = key[0], topV = val[0], lastK = key.pop(), lastV = val.pop();
+      if (key.length) {
+        key[0] = lastK; val[0] = lastV;
+        let i = 0;
+        for (;;) {
+          const l = 2 * i + 1, r = l + 1;
+          let m = i;
+          if (l < key.length && key[l] < key[m]) m = l;
+          if (r < key.length && key[r] < key[m]) m = r;
+          if (m === i) break;
+          [key[m], key[i]] = [key[i], key[m]];
+          [val[m], val[i]] = [val[i], val[m]];
+          i = m;
+        }
+      }
+      return [topK, topV];
+    }
+  };
+}
+
+// Priority-flood depression filling (Barnes/Lehman/Mulla 2014). Raises every
+// interior pit to the level of its lowest outlet, plus a tiny EPSILON gradient
+// so the filled surface still drains rather than forming a dead flat.
+//
+// This is what makes real drainage networks possible at all. Before terrain
+// had genuine 2km-scale roughness the field was smooth enough that flow just
+// slid downhill across a whole window; with real roughness, D8 on the RAW
+// heightmap terminates in a local pit within a handful of tiles almost
+// everywhere (measured: 2540 pits and zero rivers in one 250x250 window), so
+// nothing ever accumulates into a channel. Filling first lets flow cross those
+// pits, and the fill DEPTH is itself the signal for where standing water
+// actually belongs — a pond is a basin deep enough to hold water, not merely
+// any cell with no lower neighbour.
+// Returns TWO surfaces from a single flood, because they answer different
+// questions and must not be conflated:
+//   `level` — the true water surface: a pit is raised to exactly its outlet
+//     elevation, no more. `level - h` is therefore the real standing-water
+//     depth, which is what decides where a pond goes.
+//   `route` — the same fill plus a monotonically increasing EPSILON, so D8 has
+//     a defined downhill direction across an otherwise dead-flat filled basin.
+// Using `route` for depth (an earlier version of this) badly overcounts: the
+// epsilon accrues along the whole flood path, so a large basin's far end reads
+// as metres deep purely from path length, and 44% of a window came out as pond.
+const EPSILON = 1e-4;
+
+function priorityFlood(h, n) {
+  const level = Float64Array.from(h);
+  const route = Float64Array.from(h);
+  const closed = new Uint8Array(n * n);
+  const heap = makeHeap();
+
+  // Seed with the grid border: everything drains out through it. Interior
+  // cells enter the heap only as the flood reaches them.
+  for (let i = 0; i < n; i++) {
+    for (const k of [i, (n - 1) * n + i, i * n, i * n + (n - 1)]) {
+      if (!closed[k]) { closed[k] = 1; heap.push(route[k], k); }
+    }
+  }
+
+  while (heap.size) {
+    const [, k] = heap.pop();
+    const ci = k % n, cj = (k - ci) / n;
+    for (const [dx, dy] of NEIGHBORS_8) {
+      const ni = ci + dx, nj = cj + dy;
+      if (ni < 0 || nj < 0 || ni >= n || nj >= n) continue;
+      const nk = nj * n + ni;
+      if (closed[nk]) continue;
+      closed[nk] = 1;
+      if (level[nk] < level[k]) level[nk] = level[k];
+      if (route[nk] <= route[k]) route[nk] = route[k] + EPSILON;
+      heap.push(route[nk], nk);
+    }
+  }
+  return { level, route };
+}
+
 // A macro cell counts as a "major river" injection point once its upstream
 // contributor count crosses this — well above what any local 500km window
 // could accumulate on its own (see IMPLEMENTATION_PLAN.md §11.2's measured
@@ -33,9 +138,31 @@ const NEIGHBORS_8 = [[-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1
 // means continental, not just a big local creek).
 const MAJOR_RIVER_FLUX = 40;
 // Flux thresholds for classifying a LOCAL (2km-tile) cell once accumulation
-// has run — tuned so the common case (most tiles) reads as bare ground.
-const STREAM_FLUX = 8;
-const RIVER_FLUX = 40;
+// has run. These have to be re-measured whenever the terrain field changes,
+// because accumulated flux is a property of the drainage structure, not an
+// absolute unit: on the old near-flat field the whole window's flux topped out
+// in the hundreds, whereas with real relief and depression filling a trunk
+// channel reaches tens of thousands. Measured over 10 windows across 2 seeds,
+// these give ~2.7% of tiles as stream and ~1.2% as river, which alongside
+// ~1.2% pond puts total surface water near 5% — a readable drainage network
+// rather than the blue web that earlier values produced.
+const STREAM_FLUX = 300;
+const RIVER_FLUX = 2500;
+// Pond classification. Depth alone is not enough: priority-flood on a BOUNDED
+// tile can only drain out through the window border, so any basin whose rim
+// lies outside the window floods all the way to that border — measured 45% of
+// tiles with non-zero fill depth and depths up to 46 elev units, i.e. entire
+// regional bowls reading as one giant lake. That is an artifact of the window,
+// not real hydrology.
+//
+// So a filled basin only counts as standing water if its connected filled
+// component is SMALL — a genuine local depression rather than regional
+// topography the flow should simply route through. Same bounded-lake idea
+// hydrology-macro.js's LAKE_CAP already uses at planet scale. 400 tiles at
+// 2km is a ~1600 km² lake, comfortably the largest thing that should read as
+// a lake inside a 500km window.
+const POND_MIN_DEPTH = 0.4;
+const POND_MAX_TILES = 400;
 
 function toXYZ(lonDeg, latDeg) {
   const lat = latDeg * Math.PI / 180, lon = lonDeg * Math.PI / 180;
@@ -81,6 +208,11 @@ export function computeLocalHydrology(surface, sampler, centerLon, centerLat, wi
     }
   }
 
+  // Flow is routed on the DEPRESSION-FILLED surface so it can cross pits
+  // instead of terminating in them; `h` itself stays the real terrain and is
+  // what the region renders. `fillDepth` is the standing-water depth each
+  // basin holds, used to place ponds below.
+  const { level, route } = priorityFlood(h, n);
   const down = new Int32Array(n * n).fill(-1);
   for (let j = 0; j < n; j++) {
     for (let i = 0; i < n; i++) {
@@ -90,7 +222,7 @@ export function computeLocalHydrology(surface, sampler, centerLon, centerLat, wi
         const ni = i + dx, nj = j + dy;
         if (ni < 0 || nj < 0 || ni >= n || nj >= n) continue;
         const nk = nj * n + ni;
-        const drop = (h[k] - h[nk]) / Math.hypot(dx, dy);
+        const drop = (route[k] - route[nk]) / Math.hypot(dx, dy);
         if (drop > bestDrop) { bestDrop = drop; best = nk; }
       }
       down[k] = best;
@@ -139,12 +271,43 @@ export function computeLocalHydrology(surface, sampler, centerLon, centerLat, wi
     }
   }
 
-  const order = Array.from({ length: n * n }, (_, k) => k).sort((a, b) => h[b] - h[a]);
+  const order = Array.from({ length: n * n }, (_, k) => k).sort((a, b) => route[b] - route[a]);
   for (const k of order) if (down[k] >= 0) flux[down[k]] += flux[k];
+
+  // Label connected components of "held standing water", then keep only the
+  // small ones as ponds (see POND_MAX_TILES). Flood-fill iteratively rather
+  // than recursively — a component can span tens of thousands of tiles.
+  const isWet = new Uint8Array(n * n);
+  for (let k = 0; k < n * n; k++) if (level[k] - h[k] >= POND_MIN_DEPTH) isWet[k] = 1;
+
+  const pondCell = new Uint8Array(n * n);
+  const seen = new Uint8Array(n * n);
+  const stack = [];
+  for (let start = 0; start < n * n; start++) {
+    if (!isWet[start] || seen[start]) continue;
+    stack.length = 0;
+    stack.push(start);
+    seen[start] = 1;
+    const members = [start];
+    while (stack.length) {
+      const k = stack.pop();
+      const ci = k % n, cj = (k - ci) / n;
+      for (const [dx, dy] of NEIGHBORS_8) {
+        const ni = ci + dx, nj = cj + dy;
+        if (ni < 0 || nj < 0 || ni >= n || nj >= n) continue;
+        const nk = nj * n + ni;
+        if (seen[nk] || !isWet[nk]) continue;
+        seen[nk] = 1;
+        stack.push(nk);
+        members.push(nk);
+      }
+    }
+    if (members.length <= POND_MAX_TILES) for (const m of members) pondCell[m] = 1;
+  }
 
   const kind = new Uint8Array(n * n);
   for (let k = 0; k < n * n; k++) {
-    if (down[k] === -1 && flux[k] > 2) kind[k] = 3; // pond: local minimum with any real catchment
+    if (pondCell[k]) kind[k] = 3;
     else if (flux[k] >= RIVER_FLUX) kind[k] = 2;
     else if (flux[k] >= STREAM_FLUX) kind[k] = 1;
   }
@@ -160,6 +323,7 @@ export function computeLocalHydrology(surface, sampler, centerLon, centerLat, wi
   const outFlux = new Float64Array(winTiles * winTiles);
   const outKind = new Uint8Array(winTiles * winTiles);
   const outPond = new Uint8Array(winTiles * winTiles);
+  const outDepth = new Float64Array(winTiles * winTiles);
   for (let j = 0; j < winTiles; j++) {
     for (let i = 0; i < winTiles; i++) {
       const src = (j + haloTiles) * n + (i + haloTiles);
@@ -168,8 +332,9 @@ export function computeLocalHydrology(surface, sampler, centerLon, centerLat, wi
       outFlux[dst] = flux[src];
       outKind[dst] = kind[src];
       outPond[dst] = kind[src] === 3 ? 1 : 0;
+      outDepth[dst] = level[src] - h[src];
     }
   }
 
-  return { n: winTiles, h: outH, flux: outFlux, kind: outKind, isPond: outPond };
+  return { n: winTiles, h: outH, flux: outFlux, kind: outKind, isPond: outPond, depth: outDepth };
 }

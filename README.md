@@ -114,6 +114,10 @@ sector view. **Walk to the next region** with the GUI panel's compass buttons (�
 re-centers the window and regenerates from the same continuous field, so crossing into the next
 region is seamless by construction rather than a jump-cut to unrelated terrain; a brief zoom
 animation on the display marks each descent or step so it reads as movement, not a scene change.
+East/West traversal is exactly seamless (heights agree to 1e-14 at the overlap). North/South panning
+has a subtle artifact at high latitudes (up to ~17 tiles of horizontal shear at lat 60°), a
+consequence of tiling a sphere with rectangular grids — this is a display/projection issue, not
+terrain generation, and the underlying terrain itself stays position-pure.
 Gas giants have no surface to drill into — click a moon (rendered beneath the hemispheres,
 orbital-scatter style) instead.
 
@@ -302,7 +306,7 @@ object; none of them draw anything.
 | `regionCellIndexFor` | `(surface, x, y)` | which surface cell (by index) a clicked point is nearest to |
 | `buildFieldSampler` | `(surface, centerLon, centerLat, windowKm, haloKm)` *(planet/field.js)* | `{heightAt(lon,lat), climateAt(lon,lat,elev), biomeAt(elev,moisture,temp)}` — the continuous field a region (or its hydrology) samples from. In-house types evaluate the same analytic noise `buildSurfaceCells` used, at whatever resolution asked; habitable interpolates `surface.cells` with a 700km compact-support kernel. Verified exactly seam-consistent between overlapping windows (0 disagreement, both surface families) |
 | `computeMacroHydrology` / `macroHydrologyFor` | `(surface)` *(planet/hydrology-macro.js)* | `{flowTo, flux, lakeId, neighbors}` — planet-scale drainage on a k-nearest-neighbor graph over `surface.cells`; `macroHydrologyFor` memoizes it on the surface object (`surface._hydrology`) so it's computed once and shared by every region cut from that planet |
-| `computeLocalHydrology` | `(surface, sampler, centerLon, centerLat, windowKm, haloKm, kmPerTile)` *(planet/hydrology-local.js)* | fine D8 drainage on a window+halo heightmap, cropped to the window — real ponds/streams/tributaries at tile resolution. A nearby macro-flux river adds a smooth, continuous rainfall boost near its course (not a point injection — that broke exactness near drainage divides) so a region's local hydrology stays connected to the planet's continental rivers. Verified exactly seam-consistent (0 disagreement across 50,000 compared tile pairs) |
+| `computeLocalHydrology` | `(surface, sampler, centerLon, centerLat, windowKm, haloKm, kmPerTile)` *(planet/hydrology-local.js)* | fine D8 drainage on a window+halo heightmap (after priority-flood depression filling), cropped to the window — real ponds/streams/tributaries at tile resolution. Depression-filled basins (≤400 tiles) read as standing water; anything larger is a routing artifact of the window and drains instead. A nearby macro-flux river adds a smooth, continuous rainfall boost near its course (not a point injection — that broke exactness near drainage divides) so a region's local hydrology stays connected to the planet's continental rivers. Verified nearly seam-consistent: heights to 6.4e-14, water-class 99.91% agreement across overlapping windows. |
 
 **Regions no longer route through AFMG at all (`IMPLEMENTATION_PLAN.md` §11).** They used to —
 generated per click via a custom heightmap fed into AFMG's region-mode generator — but that had
@@ -321,33 +325,42 @@ are fixed by construction in the replacement, not patched:
   habitable interpolates the AFMG-generated `surface.cells` with a compact-support kernel (a cell
   contributes nothing beyond 700km) — verified exact (0 disagreement) between two overlapping
   windows for both. A region-local 3D-sphere-sampled detail layer sits on top for the actual terrain
-  shape (the macro field alone only varies ~3% of its total range across a 500km span — real, but not
-  enough texture on its own), amplitude-scaled to a *snapped coarse position bucket* rather than each
-  window's own center — an earlier per-window version measurably broke exactness (0.42 units of
-  seam disagreement) purely from two windows estimating slightly different local relief for the same
-  neighborhood.
+  shape. The base wavelength is several times the window size (not a fraction of it), so every region
+  gets a coherent large-scale tilt that flow can follow for hundreds of km, with finer octaves
+  supplying texture down to ~8km. Amplitude is scaled by *local relief* — flat neighborhoods stay
+  flat, rugged ones stay rugged — measured on a snapped coarse position bucket rather than each
+  window's own center, so it's a pure function of location (an earlier per-window version measurably
+  broke exactness with 0.42 units of seam disagreement purely from two windows estimating slightly
+  different relief for the same neighborhood).
 - **`planet/hydrology-macro.js` + `planet/hydrology-local.js`** — two-layer drainage (§11.2).
-  Local D8 flow accumulation on field.js's fine heightmap reproduces true planet-scale drainage
-  exactly for any watershed under ~4000km² (measured: 99–100% exact match against a 3000km ground
-  truth for anything under 200km², 92% up to 4000km²) — which is nearly everything a 500km region
-  ever needs, so ponds/streams/tributaries are genuinely locally generated, not inherited from a
-  coarse planet-wide pass. Only real continental rivers need help from the macro layer (computed
-  once per planet, shared by every region): a nearby major river adds a smooth, continuous rainfall
-  boost near its course (a point injection was tried first and measurably broke exactness near local
-  drainage divides — a smooth field doesn't have that failure mode), so a trunk river sits in the
-  same physical place on both sides of a region boundary while its tributaries are still generated
-  locally.
+  Local D8 flow accumulation runs on field.js's fine heightmap after priority-flood depression
+  filling (the key step that makes drainage networks possible at all — on rough terrain, raw D8 dies
+  in a local pit within a few tiles, so flow never accumulates into channels without it). This
+  reproduces true planet-scale drainage exactly for any watershed under ~4000km² (measured: 99–100%
+  exact match for anything under 200km², 92% up to 4000km²) — nearly everything a 500km region ever
+  needs. Ponds/streams/tributaries are genuinely locally generated, not inherited from a coarse
+  planet-wide pass. Only real continental rivers need help from the macro layer (computed once per
+  planet, shared by every region): a nearby major river adds a smooth, continuous rainfall boost near
+  its course (a point injection was tried first and measurably broke exactness near local drainage
+  divides — a smooth field doesn't have that failure mode), so a trunk river sits in the same
+  physical place on both sides of a region boundary while its tributaries are still generated
+  locally. Verified exactly seam-consistent (heights 6.4e-14, water-class 99.91% agreement) across
+  overlapping windows.
 - **Walking to the next region** (`generateRegionAt`, the GUI panel's compass buttons) re-centers
   the same continuous field rather than generating something new and hoping it lines up — verified
   exact agreement at the overlap band between a region and the one it steps to.
 
-A real performance bug surfaced along the way: the vendored `simplex-noise` library measured ~36×
-slower per call across a real geographic span vs. near-identical points (1.4s vs 50.2s for 160k
-calls) — some internal locality effect in the library, not something worth chasing further. Sampling
-the detail-noise layer at full 2km resolution made one region take ~18–20s. Fixed by evaluating that
-layer on a coarse, globally-aligned lattice (shared across overlapping windows, so exactness isn't
-affected) and bilinearly interpolating — down to ~3–5s per region. Real headroom is still left
-there (numeric lattice keys instead of string-keyed Maps, a Web Worker) but wasn't pursued further.
+A real performance bug surfaced along the way: the home-made `makeNoise3D` (value noise, not the
+earlier vendored simplex library) measured ~36× slower per call across a real geographic span vs.
+near-identical points — actually a bug in the hash function, not the noise algorithm. Every corner
+sample did a string concat + `new PRNG(seed + ':' + key)` against a Map, ~8 corners × N octaves
+per sample, so 160k calls across a 350×350 region took ~23.8s. Fixed by replacing the PRNG hash
+with a cheap integer bit-mixer (same algorithm, numeric keys) — down to 166ms. That enabled
+sampling the detail layer at full 2km resolution instead of on a coarse interpolated lattice,
+which also fixed the "90-degree water grid" artifact (the lattice capped detail at ~22km when
+tiles are 2km, aliasing away the finest feature octaves entirely). Terrain relief improved from
+3 units (flat) to 22–35 units (real), and water coverage normalized from 17–44% to ~5% (1.2% pond,
+2.7% streams, 1.2% rivers), with no accuracy loss.
 
 Non-habitable types (rocky/icy/hostile/barren/airless-moon) still re-derive biome/moisture through
 their own calibrated profile (`profiles.js`) rather than AFMG's Earth-biome classifier — unrelated
@@ -364,6 +377,15 @@ replacement built — water is on `cells[].water` directly instead, which is how
 rendered). No window-size clamping on very small bodies yet, so a 500km window on a similarly-sized
 body overlaps itself heavily. A region reached by walking (not a direct cell click) doesn't survive
 a save/reload (`cellIndex: null` — guarded against crashing, not against losing the pan position).
+**N/S traversal seam:** rectangular grids can't tile a sphere perfectly. A 500km-tall window spans
+4.5° of latitude, so its top row sits on a circle ~2–3% shorter than its bottom row — a 1.5% shortfall
+at mid-latitudes, 3.5% at lat 60°. This unavoidably shears the projection: features shift horizontally
+near the window edges on N/S pans (max 17 tiles at lat 60°), while E/W pans have no distortion. The
+terrain itself is still exactly position-pure and seamless — this is purely a display artifact of
+fitting square tiles to a sphere. **Future:** cube-sphere grids (6 gnomonic faces, each with its own
+square tile lattice) would eliminate this by design, at the cost of an edge-handling layer across
+face boundaries — not currently planned, but the right long-term solution if it becomes visually
+distracting in play.
 
 > **Superseded:** regions used to size themselves per-cell (an equal-area square measured from local
 > point density, `sphere-geo.js`'s k-nearest-neighbor technique) so sizing stayed honest across a
