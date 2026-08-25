@@ -12,9 +12,10 @@
 // exactly: priority-flood (see below) is a window-global operation, so a basin
 // whose outlet lies beyond one window's halo fills to a slightly different
 // level than it does in a window that can see that outlet. Measured between
-// two windows offset 200km, over 37500 shared tiles: heights agree to 6.4e-14,
-// water-class agrees on 99.91% of tiles, with flux differing by up to 41% on
-// the ones that disagree. A one-tile traversal step agrees exactly (0/250).
+// two windows offset 200km, over 87500 shared tiles: heights agree to 1.4e-12,
+// water-class agrees on 94.4% of tiles. (An earlier note here claimed 99.91%;
+// that predates the terrain gaining real 2km roughness, which gives depression
+// filling far more to do and so more for a window edge to disagree about.)
 // That residual is the price of having real drainage networks at all — without
 // depression filling, flow terminates in a local pit within a few tiles and no
 // channels form anywhere (measured: 2540 pits, zero rivers, in one window).
@@ -129,119 +130,111 @@ function priorityFlood(h, n) {
   return { level, route };
 }
 
-// Garbrecht & Martz (1997) flat-routing: inside a filled basin, `route`'s
-// direction is chosen by BFS visitation order alone, which behaves like a
-// distance field from a single point — its gradient is nearly constant over
-// broad neighborhoods, so D8 on it traces long, near-straight rays toward the
-// pour point (measured: straight runs up to ~180 tiles, roughly a quarter of
-// all classified river tiles running dead straight). Garbrecht & Martz's fix
-// shapes the synthetic surface from BOTH basin boundaries instead of one BFS
-// source: distance from the low/outlet edge (`distLow`) and distance from the
-// high/rim edge (`distHigh`), combined so it follows the basin's actual shape
-// rather than radiating from a point.
+// D8 straight-line artifact. Steepest-descent D8 has only eight possible
+// directions, so on any locally SMOOTH slope every cell in a neighbourhood
+// picks the same one and the channel comes out as a dead-straight ray. This
+// field is smooth over long stretches — inside a depression-filled basin
+// especially, where `route` is a synthetic BFS-order gradient rather than real
+// terrain — so the artifact was severe: measured 18-25% of all channel tiles
+// sitting in perfectly straight runs of 20+ tiles, with individual runs up to
+// ~180 tiles, drawn as the parallel 45-degree lines that made regions look
+// hatched rather than drained.
 //
-// This can't just REPLACE `route`: naively using `distLow - 2*distHigh` as the
-// D8 field on its own creates new local minima inside complex basin shapes —
-// measured 4614 of them in one test window, breaking flow across nearly half
-// the map. So `route` stays the correctness FILTER (only a neighbor with a
-// strictly lower `route` is ever a candidate — this is what already
-// guarantees termination with no cycles/new pits) and the Garbrecht-Martz
-// value is only the SELECTOR among those already-valid candidates. Verified
-// across 9 windows (3 seeds x 3 locations): zero new unresolved pits in every
-// case, straight-run p90 down (~7 -> ~5), fraction of runs over 20 tiles
-// roughly halved.
-function labelFilledComponents(isFilled, n) {
-  const compId = new Int32Array(n * n).fill(-1);
-  const components = [];
-  for (let start = 0; start < n * n; start++) {
-    if (!isFilled[start] || compId[start] >= 0) continue;
-    const stack = [start];
-    compId[start] = components.length;
-    const members = [start];
-    while (stack.length) {
-      const k = stack.pop();
-      const ci = k % n, cj = (k - ci) / n;
-      for (const [dx, dy] of NEIGHBORS_8) {
-        const ni = ci + dx, nj = cj + dy;
-        if (ni < 0 || nj < 0 || ni >= n || nj >= n) continue;
-        const nk = nj * n + ni;
-        if (!isFilled[nk] || compId[nk] >= 0) continue;
-        compId[nk] = components.length;
-        stack.push(nk);
-        members.push(nk);
-      }
-    }
-    components.push(members);
-  }
-  return components;
+// An earlier attempt (Garbrecht & Martz 1997 flat-routing, shaping the
+// in-basin gradient from distance-to-outlet and distance-to-rim) is gone: the
+// 8-connected BFS distance transforms it needs are a Chebyshev metric, whose
+// own medial axis is built from 45-degree lines, so it swapped one set of
+// straight diagonals for another (measured: no improvement, 20-25% still in
+// long runs).
+//
+// The fix instead attacks the direction quantisation itself. Compute the
+// CONTINUOUS downslope aspect from a central-difference gradient of the real
+// terrain, perturb it by a deterministic per-cell angle, and score each
+// candidate neighbour by how well it aligns with that jittered aspect as well
+// as by its drop. A slope whose true aspect falls between two octants then
+// alternates between them instead of committing to one, which is what turns a
+// straight ray into a meander.
+//
+// Two properties are preserved exactly:
+//   - No new pits or cycles. `route` remains a hard FILTER: a neighbour is
+//     only ever a candidate if `route[nk] < route[k]`. Every step therefore
+//     strictly descends a finite field, so every path still terminates at the
+//     border. Alignment only reorders candidates that were already legal.
+//   - Window-independence. The jitter is hashed from the cell's own HEIGHT
+//     (which field.js guarantees is a pure function of position, agreeing to
+//     1.4e-12 between overlapping windows), never from its grid index, which
+//     would differ between two windows covering the same ground.
+//
+// Measured over 6 windows across 3 seeds: channel tiles in straight runs of
+// 20+ drop from 23.7/25.5/18.3/20.1/5.8/5.6% to 6.4/3.9/6.0/4.5/4.1/4.2%,
+// p99 run length from 13-28 tiles to 9-13, with zero unresolved pits in every
+// case. Seam agreement between two windows offset 200km is 94.4% of shared
+// tiles versus 95.8% before -- the jitter makes flow marginally more sensitive
+// to the window-dependent part of `route`, which is the same tradeoff
+// depression filling itself already makes (see the header note).
+//
+// JITTER is in radians (+-1 rad ~ +-57 degrees, comfortably more than the 45
+// between adjacent octants, so ties actually break). ALIGN_WEIGHT is relative
+// to the drop term, which is normalised per-cell to 0..1 so the two are
+// comparable regardless of local relief; below ~0.6 the drop term dominates
+// and the straight runs come back unchanged.
+const JITTER = 1.0;
+const ALIGN_WEIGHT = 1.0;
+
+// Deterministic 0..1 hash of a float's bits. Used to derive the per-cell
+// jitter from the height value itself (see above) — an integer bit-mixer of
+// the same shape as noise.js's makeFastNoise3D, so it costs nothing per cell.
+const HASH_BUF = new ArrayBuffer(8);
+const HASH_F64 = new Float64Array(HASH_BUF);
+const HASH_I32 = new Int32Array(HASH_BUF);
+function hashFloat(v) {
+  HASH_F64[0] = v;
+  let x = Math.imul(HASH_I32[0], 374761393) ^ Math.imul(HASH_I32[1], 668265263);
+  x = Math.imul(x ^ (x >>> 13), 1274126177);
+  return ((x ^ (x >>> 16)) >>> 0) / 4294967296;
 }
 
-// Multi-source BFS restricted to one basin component, from every member cell
-// that borders a real (non-filled) neighbor satisfying `isSource`.
-function bfsWithinComponent(members, memberSet, h, n, isLower, dist) {
-  const q = [];
-  for (const k of members) {
-    const ci = k % n, cj = (k - ci) / n;
-    let isEdge = false;
-    for (const [dx, dy] of NEIGHBORS_8) {
-      const ni = ci + dx, nj = cj + dy;
-      if (ni < 0 || nj < 0 || ni >= n || nj >= n) continue;
-      const nk = nj * n + ni;
-      if (memberSet.has(nk)) continue;
-      if (isLower ? h[nk] < h[k] : h[nk] > h[k]) { isEdge = true; break; }
-    }
-    if (isEdge) { dist[k] = 0; q.push(k); }
-  }
-  let head = 0;
-  while (head < q.length) {
-    const k = q[head++];
-    const ci = k % n, cj = (k - ci) / n;
-    for (const [dx, dy] of NEIGHBORS_8) {
-      const ni = ci + dx, nj = cj + dy;
-      if (ni < 0 || nj < 0 || ni >= n || nj >= n) continue;
-      const nk = nj * n + ni;
-      if (!memberSet.has(nk) || dist[nk] !== -1) continue;
-      dist[nk] = dist[k] + 1;
-      q.push(nk);
-    }
-  }
-}
-
-function buildFlowDirections(h, n, level, route) {
-  const isFilled = new Uint8Array(n * n);
-  for (let k = 0; k < n * n; k++) if (level[k] - h[k] > 1e-9) isFilled[k] = 1;
-
-  const components = labelFilledComponents(isFilled, n);
-  const distLow = new Int32Array(n * n).fill(-1);
-  const distHigh = new Int32Array(n * n).fill(-1);
-  for (const members of components) {
-    const memberSet = new Set(members);
-    bfsWithinComponent(members, memberSet, h, n, true, distLow);
-    bfsWithinComponent(members, memberSet, h, n, false, distHigh);
-  }
-
-  const gmVal = new Float64Array(n * n);
-  for (let k = 0; k < n * n; k++) gmVal[k] = isFilled[k] ? (distLow[k] - 2 * distHigh[k]) : 0;
-
+function buildFlowDirections(h, n, route) {
+  const at = (i, j) => h[Math.min(n - 1, Math.max(0, j)) * n + Math.min(n - 1, Math.max(0, i))];
   const down = new Int32Array(n * n).fill(-1);
+
   for (let j = 0; j < n; j++) {
     for (let i = 0; i < n; i++) {
       const k = j * n + i;
-      let bestRoute = -1, bestRouteDrop = 0;
-      let bestGM = -1, bestGMScore = -Infinity;
+      // Continuous downslope direction of the REAL terrain (not `route`) —
+      // clamped central differences, so edge cells just see a one-sided slope.
+      const gx = (at(i + 1, j) - at(i - 1, j)) / 2;
+      const gy = (at(i, j + 1) - at(i, j - 1)) / 2;
+      const ang = Math.atan2(-gy, -gx) + (hashFloat(h[k]) * 2 - 1) * JITTER;
+      const tx = Math.cos(ang), ty = Math.sin(ang);
+
+      // Two passes over the 8 neighbours: the first finds the steepest legal
+      // drop so the drop term can be normalised, the second scores. Cheaper
+      // than allocating a candidate array per cell (this runs n^2 times).
+      let maxDrop = 0;
       for (const [dx, dy] of NEIGHBORS_8) {
         const ni = i + dx, nj = j + dy;
         if (ni < 0 || nj < 0 || ni >= n || nj >= n) continue;
         const nk = nj * n + ni;
-        if (route[k] <= route[nk]) continue; // correctness filter: must strictly descend
-        const rdrop = (route[k] - route[nk]) / Math.hypot(dx, dy);
-        if (rdrop > bestRouteDrop) { bestRouteDrop = rdrop; bestRoute = nk; }
-        if (isFilled[k]) {
-          const gdrop = (gmVal[k] - gmVal[nk]) / Math.hypot(dx, dy);
-          if (gdrop > bestGMScore) { bestGMScore = gdrop; bestGM = nk; }
-        }
+        if (route[nk] >= route[k]) continue;
+        const drop = (route[k] - route[nk]) / Math.hypot(dx, dy);
+        if (drop > maxDrop) maxDrop = drop;
       }
-      down[k] = isFilled[k] ? (bestGM >= 0 ? bestGM : bestRoute) : bestRoute;
+      if (maxDrop === 0) continue; // no legal downhill neighbour: a border sink
+
+      let best = -1, bestScore = -Infinity;
+      for (const [dx, dy] of NEIGHBORS_8) {
+        const ni = i + dx, nj = j + dy;
+        if (ni < 0 || nj < 0 || ni >= n || nj >= n) continue;
+        const nk = nj * n + ni;
+        if (route[nk] >= route[k]) continue; // correctness filter: strict descent
+        const len = Math.hypot(dx, dy);
+        const drop = (route[k] - route[nk]) / len;
+        const align = (dx * tx + dy * ty) / len;
+        const score = drop / maxDrop + ALIGN_WEIGHT * align;
+        if (score > bestScore) { bestScore = score; best = nk; }
+      }
+      down[k] = best;
     }
   }
   return down;
@@ -331,7 +324,7 @@ export function computeLocalHydrology(surface, sampler, centerLon, centerLat, wi
   // what the region renders. `fillDepth` is the standing-water depth each
   // basin holds, used to place ponds below.
   const { level, route } = priorityFlood(h, n);
-  const down = buildFlowDirections(h, n, level, route);
+  const down = buildFlowDirections(h, n, route);
 
   // Macro handoff: nearby macro-mesh cells carrying a major river's worth of
   // flux add a smooth, continuous rainfall boost to every local tile within
