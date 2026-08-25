@@ -259,21 +259,33 @@ const MAJOR_RIVER_FLUX = 40;
 // rather than the blue web that earlier values produced.
 const STREAM_FLUX = 300;
 const RIVER_FLUX = 2500;
-// Pond classification. Depth alone is not enough: priority-flood on a BOUNDED
-// tile can only drain out through the window border, so any basin whose rim
-// lies outside the window floods all the way to that border — measured 45% of
-// tiles with non-zero fill depth and depths up to 46 elev units, i.e. entire
-// regional bowls reading as one giant lake. That is an artifact of the window,
-// not real hydrology.
+// Pond classification. Depth alone is nearly enough, with one exception:
+// priority-flood on a BOUNDED grid can only drain a basin out through the
+// grid's own border, so a basin whose true rim lies beyond the window+halo
+// floods all the way out to that border — that's an artifact of the grid
+// boundary, not real hydrology, and would read as "the whole window is one
+// giant lake" if rendered.
 //
-// So a filled basin only counts as standing water if its connected filled
-// component is SMALL — a genuine local depression rather than regional
-// topography the flow should simply route through. Same bounded-lake idea
-// hydrology-macro.js's LAKE_CAP already uses at planet scale. 400 tiles at
-// 2km is a ~1600 km² lake, comfortably the largest thing that should read as
-// a lake inside a 500km window.
+// An earlier version excluded any filled connected component above a fixed
+// tile-count cap (400 tiles / ~1600km²) to avoid that, on the assumption that
+// only a window-boundary artifact could get that large. That assumption
+// didn't survive the terrain gaining real 2km-scale relief: legitimate,
+// fully-enclosed basins (with a real detected rim, never touching the grid
+// border) now commonly span 5-000-30,000+ tiles. Capping by size excluded
+// those too, rendering a real, sizeable lake as plain dry ground right next
+// to a smaller sub-pond that happened to land under the cap — a hard color
+// cliff at an arbitrary tile count, not a shoreline.
+//
+// The correct discriminator is BOUNDEDNESS, not size: a filled component
+// counts as standing water unless it touches the grid's outer edge (the
+// literal signature of "flow never found a lower way out inside this grid").
+// Measured across 3400+ sampled components: none of the large ones (>400
+// tiles, the old cap) ever touched the border — every one was a real,
+// bounded basin. Water coverage is therefore no longer capped near the ~5%
+// figure measured for the size-based version; a region whose terrain
+// genuinely sits in one broad low basin can now read as substantially wetter,
+// which is the physically honest result of a bounded low area with no outlet.
 const POND_MIN_DEPTH = 0.4;
-const POND_MAX_TILES = 400;
 
 function toXYZ(lonDeg, latDeg) {
   const lat = latDeg * Math.PI / 180, lon = lonDeg * Math.PI / 180;
@@ -371,9 +383,12 @@ export function computeLocalHydrology(surface, sampler, centerLon, centerLat, wi
   const order = Array.from({ length: n * n }, (_, k) => k).sort((a, b) => route[b] - route[a]);
   for (const k of order) if (down[k] >= 0) flux[down[k]] += flux[k];
 
-  // Label connected components of "held standing water", then keep only the
-  // small ones as ponds (see POND_MAX_TILES). Flood-fill iteratively rather
-  // than recursively — a component can span tens of thousands of tiles.
+  // Label connected components of "held standing water", then keep every one
+  // that's actually BOUNDED (see the comment above POND_MIN_DEPTH) — only a
+  // component that touches the grid's own outer edge is excluded, since that's
+  // the signature of flow never finding a lower way out inside this grid.
+  // Flood-fill iteratively rather than recursively — a component can span
+  // tens of thousands of tiles.
   const isWet = new Uint8Array(n * n);
   for (let k = 0; k < n * n; k++) if (level[k] - h[k] >= POND_MIN_DEPTH) isWet[k] = 1;
 
@@ -386,9 +401,11 @@ export function computeLocalHydrology(surface, sampler, centerLon, centerLat, wi
     stack.push(start);
     seen[start] = 1;
     const members = [start];
+    let touchesEdge = false;
     while (stack.length) {
       const k = stack.pop();
       const ci = k % n, cj = (k - ci) / n;
+      if (ci === 0 || cj === 0 || ci === n - 1 || cj === n - 1) touchesEdge = true;
       for (const [dx, dy] of NEIGHBORS_8) {
         const ni = ci + dx, nj = cj + dy;
         if (ni < 0 || nj < 0 || ni >= n || nj >= n) continue;
@@ -399,7 +416,7 @@ export function computeLocalHydrology(surface, sampler, centerLon, centerLat, wi
         members.push(nk);
       }
     }
-    if (members.length <= POND_MAX_TILES) for (const m of members) pondCell[m] = 1;
+    if (!touchesEdge) for (const m of members) pondCell[m] = 1;
   }
 
   const kind = new Uint8Array(n * n);
