@@ -12,11 +12,20 @@ At the top, a Conway's-Game-of-Life-style simulation grows cultures across the g
 generations, the way civilizations might actually spread and collapse. Each culture has a bioform
 (species type), a technology level (TL 4.0 to 5.9, advancing probabilistically each generation with
 a chance of transcendence at TL 5+), and trait vectors (expansionist, industrial, alien alignment).
-That simulation decides how "developed" any given patch of space is, which drives habitat
-placement — developed sectors get more habitable systems, and cultures build cities/outposts/
-megastructures on planets according to their TL, bioform affinity, and industrial sophistication.
-Some planets stay empty; others fill with dozens of settlements. Ruins mark the territory of
-extinct cultures, flavored by their extinction cause (died-out vs. transcended).
+
+**Every system in a sector traces back to something that actually happened there.** A sector's
+systems aren't a flat random count — they're read directly off that sector's own slice of
+simulation history (birth, resettlement, sustained habitation, conflict, death, extinction,
+transcendence), one system per event, scaled by the founding culture's bioform (a wide-affinity
+bioform like machine sprawls across more marginal worlds per event than a picky one like
+gasborne). A sector no culture ever reached isn't empty either — it gets a small, distance-faded
+mix of neutral outposts, pre-spacefaring native-culture candidates, ancient ruins, and lawless
+trouble spots (pirates, derelicts, rogue military), fading out the further it sits from any
+sector a culture actually touched. Cultures build cities/outposts/megastructures on planets
+according to their TL, bioform affinity, and industrial sophistication; some planets stay empty,
+others fill with dozens of settlements. Ruins mark the territory of extinct cultures, flavored by
+their extinction cause (died-out vs. transcended) — or, in untouched space, by a precursor culture
+that predates anything the live simulation ever modeled.
 
 See `VISION.md` for the original target experience, `IMPLEMENTATION_PLAN.md` for the phased build
 plan (galaxy → region), and `POPULATION_PLAN.md` for the culture simulation specifically. This file
@@ -52,10 +61,15 @@ whichever culture currently holds that stretch of space:
 | `.` (dim gray) | Abandoned — once claimed, no one lives there now |
 | ` ` (blank) | Never claimed |
 
-Click a sector to generate and enter it. Inside, stars are laid out in 3D-ish space; click one to
-generate and enter its **system**, where you'll see the primary star, any companion stars, and
+Click a sector to generate and enter it. Its systems are read off that sector's own culture
+history (see above) rather than a flat count, so a sector's star field is now legible: a system's
+glyph is tinted by *why* it's there — a normal spectral color for anything a living culture
+actually founded/held/fought over, but ruins read as dull gold, trouble spots as red,
+transcension sites as violet, native-culture candidates as green, neutral outposts as cyan. Click
+a system to generate and enter it, where you'll see the primary star, any companion stars, and
 planets arranged by orbital distance (a deterministic Fibonacci/golden-angle spiral, not randomly
-scattered).
+scattered) — the info panel also shows that system's origin (which historical event created it,
+and its founding bioform if it has one).
 
 Click a planet — or a moon orbiting a gas giant — to descend to its **surface**. Unlike every other
 level, the planet view isn't ASCII: it's two side-by-side [d3](https://d3js.org/) orthographic
@@ -90,7 +104,7 @@ there anything here"), so they work instantly even on systems/planets nobody's v
 | Descend | Click a sector / star / planet surface cell / region-terrain tile |
 | Go back up one level | `Escape`, or the **Back** button in the GUI panel |
 | Jump to the next/prev system or planet with content | **◂ Prev / Next content system ▸** (sector view) / **◂ Prev / Next habitat planet ▸** (system view) in the GUI panel |
-| Step the culture simulation forward/back | **Step Forward ▸** / **◂ Step Back** in the GUI panel — no ceiling; stepping past what's been computed so far extends the simulation live instead of recomputing from scratch |
+| Step the culture simulation forward/back | **Step Forward ▸** / **◂ Step Back** in the GUI panel — no ceiling; stepping past what's been computed so far extends the simulation live instead of recomputing from scratch. Sector content is now a function of the current step, so stepping while below the galaxy view drops you back to it (a sector generated at one step is stale the moment the step changes) |
 | New galaxy | **New Galaxy** in the GUI panel (uses a fresh random seed) |
 | Save / Load / Delete Save | GUI panel buttons |
 
@@ -103,9 +117,9 @@ with no black areas.
 
 The right-hand **GUI panel** (via [lil-gui](https://lil-gui.georgealways.com/)) also shows live
 info for whatever you're currently looking at (star count, spectral class, planet HI rating, region
-site/feature counts, current culture-simulation generation, etc.), and lets you tweak a couple of
-generation parameters (habitable-system count, total system count per sector) with a live
-regenerate.
+site/feature counts, current culture-simulation generation, a system's origin/founding bioform,
+etc.), and lets you tweak a sector's **Density** (0.5×–2×, a multiplier on every history-derived
+system count, not an absolute) with a live regenerate.
 
 A breadcrumb bar above the display always shows where you are (`GALAXY ▸ Sector 3,-2 ▸ Vrecaur ▸
 Planet 2 ▸ Region (14.2°,-38.7°)`), and every click pops up a short toast with details about what you
@@ -156,6 +170,9 @@ src/
     mixins.js             small math/string helpers on `window._`
     constants/            static data: astrophysics tables, colors, HI() habitability scale
     galaxy/                galaxy → sector → system → planet generators
+                              - archetypes.js: turns a sector's population history (or its distance
+                                from one that has any) into the plain "system spec" list
+                                generateSector() actually builds systems from
     planet/                 planet-surface generators (5 in-house types + AFMG habitable adapter)
                               - cell-terrain.js: per-cell custom heightmap generator; compass-aligned
                                 ramp from cell's own elevation to neighbors' + 3D-noise detail
@@ -171,6 +188,9 @@ src/
                               - context.js: CultureContext lookup for a given sector
                               - habitation.js: placement engine for planet/system/sector habitats
                               - native.js: pre-spacefaring culture generation
+                              - ledger.js: turns simulation history into a per-sector timeline of
+                                events (birth/resettle/sustained/conflict/death/extinction/
+                                transcension) — what galaxy/archetypes.js reads to decide sector content
     rogue/                    renderers — one per level, mirrors the generator folders. ASCII/ROT.Display
                               for every level except planet.js, which renders via d3 (see above)
 lib/                    vendored third-party scripts, including AFMGData
@@ -218,10 +238,12 @@ object; none of them draw anything.
 | Function | Signature | Returns |
 |---|---|---|
 | `generateGalaxy` | `(seed, {radius, sectorSize})` | `{seed, radius, sectorSize, sectors: [{gx, gy, seed}]}` — coordinates only, no sector content until clicked |
-| `generateSector` | `(seed, {bounds, nHab, nSystems, gx, gy, ctx})` | `{seed, gx, gy, systems: [...], habitation: {...}}` — `ctx` (from `cultureContextFor`) biases `nHab` based on culture development; sector-level habitats are placed in `habitation` |
+| `generateSector` | `(seed, {bounds, gx, gy, pop, uptoStep, touchHorizon, densityScale, ctx})` | `{seed, gx, gy, systems: [...], habitation: {...}}` — systems come from `archetypes.js`'s history-derived plan (`pop`/`uptoStep`/`touchHorizon` required to build it; no `pop` -> zero systems, since there's nothing to justify inventing any). Each system carries its own `.ctx`/`.origin` from that plan. `ctx` here is only the sector's CURRENT dominant-owner context, used for sector-WIDE assets (`habitation`'s deep space stations/capital ships) — `densityScale` (0.5–2×) is a flat multiplier on every derived count |
 | `generateSystem` | `(seed, opts)` | `{seed, star, planets}` — orbital positions (`.pos = {au, angleDeg, x, y}`) are assigned here, at generation time, not by the renderer |
 | `generateStar` | `(rng, opts)` | a star record (spectral class, temperature, etc.) |
 | `generatePlanet` / `generateMoon` | `(seed, opts)` | a planet/moon record; `kind: 'planet'\|'moon'`, `parentSeed` (a string, never a live object reference) |
+| `planTouchedSector` | `(pop, gx, gy, uptoStep, seed, densityScale)` *(galaxy/archetypes.js)* | system specs for a sector at least one culture has ever claimed — one per ledger event (birth/resettle/death/extinction/transcension/conflict/contested), scaled by the founding culture's bioform breadth; `sustained` steps accumulate per culture into a diminishing-returns handful of "deepening" systems instead of one per step |
+| `planUntouchedSector` | `(pop, gx, gy, uptoStep, touchHorizon, seed, densityScale)` *(galaxy/archetypes.js)* | system specs for a sector NO culture has ever claimed — a 4/4/4 baseline (neutral outposts or native-culture candidates / ancient ruins / trouble spots), faded out by ring-distance to the nearest ever-touched sector (full strength at ring 1, nothing by ring 6) |
 
 ### Planet surfaces & regions (`src/engine/planet/`)
 
@@ -318,12 +340,17 @@ but so would claiming a 100km-side region covers a 2000km-radius body.
 | `generateSystemHabitation` | `(seed, ctx)` | stellar megastructures (collectors, ringworld segments) attached to a system's star |
 | `generateSectorHabitation` | `(seed, ctx, bounds)` | sector-level habitats (deep space stations, capital ships, derelicts, pirate havens) |
 | `generateNativeCulture` | `(seed, ctx, surface)` | a pre-spacefaring (TL 0–3) native culture on a planet, or null if none arose; entirely outside the main sim |
+| `buildTouchHorizon` | `(pop)` *(population/ledger.js)* | `Map<cellKey, earliestStep>` — the earliest step each sector cell was EVER claimed by a culture; computed once per population and cached (`rogue.js`), not per sector-entry |
+| `ringDistanceToTouched` | `(touchHorizon, gx, gy, uptoStep, maxRing)` *(population/ledger.js)* | Chebyshev ring-distance from a sector to the nearest one touched at or before `uptoStep` — what fades untouched-sector content out with distance |
+| `sectorLedger` | `(pop, gx, gy, uptoStep)` *(population/ledger.js)* | the chronological event timeline for one sector cell — `birth\|resettle\|sustained\|contested\|conflict\|death\|extinction\|transcension`, each with that culture's bioform/TL/traits AS OF that step (not its current/final state) |
+| `settlementBreadth` | `(bioform)` *(population/bioform.js)* | how many world types (of 7) a bioform can plausibly settle (affinity >= 0.3) — derived from the existing affinity table, not a separate tuned value; drives how many systems a bioform's presence accounts for in `planTouchedSector` |
 
 A culture record now includes:
 
 ```js
 {
   id, parent, bornStep, deadStep, color, origin,
+  inheritKind: 'successor'|'schism'|null, // null = fresh genesis founding
   bioform: 'terran'|'cryophile'|...,
   tl: 4.0..5.9,
   traits: { expansionist, industrial, insular, alien },

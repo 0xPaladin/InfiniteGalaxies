@@ -137,7 +137,14 @@ function applyLifeStep(grid, validCells, registry) {
       }
       winner = bestId;
     }
-    claim(grid, b.gx, b.gy, winner);
+    const cell = claim(grid, b.gx, b.gy, winner);
+    // A cell born from a MULTI-culture contest is a frontier flashpoint even
+    // though only one side ends up claiming it — record the losing side(s) so
+    // the ledger (population/ledger.js) can surface a `contested` event for
+    // it, distinct from an ordinary uncontested `birth`. Cleared on the next
+    // birth here in case a later step's contest resolves differently.
+    if (unique.length > 1) cell.contested = unique.filter(id => id !== winner);
+    else delete cell.contested;
   }
 }
 
@@ -239,7 +246,10 @@ function applySchisms(step, grid, registry, rng) {
 function buildSnapshot(step, grid, registry) {
   const cells = [];
   for (const [, cell] of grid) {
-    cells.push({ gx: cell.gx, gy: cell.gy, alive: cell.alive, culture: cell.claims[0], claims: [...cell.claims] });
+    cells.push({
+      gx: cell.gx, gy: cell.gy, alive: cell.alive, culture: cell.claims[0], claims: [...cell.claims],
+      contested: cell.contested ? [...cell.contested] : null
+    });
   }
 
   const aliveByC = new Map(), allByC = new Map();

@@ -11,6 +11,24 @@ const HABITAT_GLYPHS = {
   'pirate haven': { glyph: '☠', fg: '#cc4444' }
 };
 
+// A system's `.origin` (galaxy/archetypes.js) says WHY it's here — tint its
+// star glyph by that instead of pure spectral color where it reads better as
+// history: a dead/abandoned system shouldn't look identical to a thriving
+// one just because they happen to share a spectral class. Kinds not listed
+// here (birth/resettle/sustained/conflict/contested — i.e. a LIVING culture)
+// keep the normal spectral-class color, since those genuinely are what they
+// look like astronomically; only the non-astronomical "what's the deal with
+// this system" kinds get overridden.
+const ORIGIN_COLOR = {
+  ruins: '#9a8a5a',
+  trouble: '#cc4444',
+  extinction: '#6a5a4a',
+  transcension: '#aa88ff',
+  'native-candidate': '#7ddd7d',
+  'neutral-outpost': '#66ccff',
+  death: '#555555'
+};
+
 /**
  * Render a generated sector as ASCII. Pure renderer per IMPLEMENTATION_PLAN.md §0:
  * reads `sector`, draws, returns hit-test data — never mutates `sector`.
@@ -39,7 +57,7 @@ export function RogueSector(sector, display, opts = {}) {
       const stacked = items.length > 1;
 
       const glyph = multiplicity > 1 ? '☉' : '☀';
-      const fg = SPECTRAL_COLORS[primary.spectral];
+      const fg = (sys.origin && ORIGIN_COLOR[sys.origin.kind]) || SPECTRAL_COLORS[primary.spectral];
       const bg = stacked ? '#333333' : '#000000';
 
       display.draw(x, y, glyph, fg, bg);

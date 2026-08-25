@@ -17,6 +17,7 @@ import { initPopulation, advancePopulation, populationView, buildSnapshotIndex }
 import { cultureContextFor } from './engine/population/context.js';
 import { generatePlanetHabitation, generateSystemHabitation, planetHasHabitats } from './engine/population/habitation.js';
 import { generateNativeCulture } from './engine/population/native.js';
+import { buildTouchHorizon } from './engine/population/ledger.js';
 
 import { RogueGalaxy } from './engine/rogue/galaxy.js';
 import { RogueSector } from './engine/rogue/sector.js';
@@ -29,6 +30,28 @@ const PLANET_OVERLAYS = ['biome', 'elevation', 'temperature', 'moisture'];
 // ── Globals ──────────────────────────────────────────────────────────
 const DB_KEY = 'rogue-galaxies';
 let App = null;
+
+// A short " — flavor" suffix for a system's origin (galaxy/archetypes.js) —
+// what actually put this system here, in plain language, so a sector's
+// history reads at a glance instead of every system looking the same.
+const ORIGIN_NOTES = {
+    birth: step => `founded step ${step}`,
+    resettle: step => `resettled step ${step}`,
+    sustained: step => `long-held, still active`,
+    conflict: step => `changed hands step ${step}`,
+    contested: step => `frontier flashpoint, step ${step}`,
+    death: step => `abandoned step ${step}`,
+    extinction: step => `culture died out here, step ${step}`,
+    transcension: step => `culture transcended here, step ${step}`,
+    'neutral-outpost': () => `neutral outpost, unaffiliated`,
+    'native-candidate': () => `may harbor a pre-spacefaring culture`,
+    ruins: () => `ancient ruins`,
+    trouble: () => `lawless — trouble likely`
+};
+function originNote(origin) {
+    const fn = origin && ORIGIN_NOTES[origin.kind];
+    return fn ? ` — ${fn(origin.step)}` : '';
+}
 
 // ── Toast ────────────────────────────────────────────────────────────
 function toast(msg, ms = 2500) {
@@ -69,10 +92,11 @@ class RogueApp {
         this._resizeHandler = this._resizeHandler.bind(this);
         this._keyHandler = this._keyHandler.bind(this);
 
-        // sector generation params (not yet biased by population — see
-        // POPULATION_PLAN.md §9 step 5, deferred)
-        this.nHab = 8;
-        this.totalSystems = 100;
+        // Sector content is now event-driven (POPULATION_PLAN.md's "traceable
+        // to actual history" rule — see galaxy/archetypes.js) rather than a
+        // flat system count; this is the one dial left, a multiplier on
+        // every derived count (0.5-2x), not an absolute.
+        this.densityScale = 1;
 
         this.planetOverlay = 'biome';
 
@@ -83,10 +107,20 @@ class RogueApp {
         this.population = null;
         this.popStep = 0;
 
+        // Earliest step each sector was EVER touched by a culture (ledger.js's
+        // buildTouchHorizon) — recomputed whenever `this.population` changes
+        // (new galaxy, step forward/back past what's been computed). Sector
+        // generation needs this to decide touched-vs-untouched; recomputing it
+        // per sector-entry would be wasteful since it depends only on the full
+        // population history, not on which sector is being entered.
+        this._touchHorizon = null;
+
         // The CultureContext (population/context.js) for whichever sector is
-        // currently active — computed once on sector entry, read by every
-        // level below it (system/planet/region habitation calls all share the
-        // one sector's culture data; the sim has no finer resolution than that).
+        // currently active — the sector's CURRENT dominant owner, used only
+        // for sector-WIDE assets (deep space stations/capital ships). Individual
+        // systems/planets carry their own per-event ctx now (system.ctx, and
+        // the 'system'/'planet' stack frames' own `.ctx`) — see _enterSystem/
+        // _enterPlanet below.
         this.currentCtx = null;
 
         // Cursor into the current sector/system's "has content" list (see
@@ -202,6 +236,7 @@ class RogueApp {
         this._popState = initPopulation(this.galaxySeed, { radius: this.galaxyRadius });
         advancePopulation(this._popState, this.popSteps);
         this.population = populationView(this._popState);
+        this._touchHorizon = buildTouchHorizon(this.population);
         this.popStep = this.population.steps; // default to the most-developed generation computed so far
         this.stack = [{ level: 'galaxy', data }];
         this._render();
@@ -217,23 +252,39 @@ class RogueApp {
         if (next > this._popState.step) {
             advancePopulation(this._popState, next);
             this.population = populationView(this._popState);
+            this._touchHorizon = buildTouchHorizon(this.population); // new history extends what's "ever touched"
         }
         this.popStep = next;
-        if (this.top && this.top.level === 'galaxy') this._render();
+        // Sector content (and everything below it) is now a function of
+        // popStep (galaxy/archetypes.js reads uptoStep) — a sector generated
+        // at one step is stale the moment popStep moves, and everything
+        // pushed on top of it (system/planet/region) references objects that
+        // no longer match. Simplest safe move: drop back to the galaxy level
+        // rather than try to patch live stack frames in place.
+        if (this.top && this.top.level !== 'galaxy') {
+            this.stack.length = 1;
+            toast('Population changed — returned to galaxy view');
+        }
+        this._render();
         this._persist();
     }
 
     _enterSector(sectorStub) {
         const snapshot = this.population ? this.population.history[this.popStep] : null;
         const popIndex = snapshot ? buildSnapshotIndex(snapshot) : null;
+        // Still computed — used for sector-WIDE assets only now (see
+        // generateSector's opts.ctx doc). Individual systems get their own
+        // per-event ctx from the archetype plan (system.ctx).
         this.currentCtx = cultureContextFor(popIndex, snapshot ? snapshot.cultures : {}, sectorStub.gx, sectorStub.gy);
 
         const data = generateSector(sectorStub.seed, {
             bounds: { r: 50 },
-            nHab: this.nHab,
-            nSystems: this.totalSystems,
             gx: sectorStub.gx,
             gy: sectorStub.gy,
+            pop: this.population,
+            uptoStep: this.popStep,
+            touchHorizon: this._touchHorizon,
+            densityScale: this.densityScale,
             ctx: this.currentCtx
         });
         this.stack.push({ level: 'sector', data });
@@ -248,11 +299,15 @@ class RogueApp {
     // generateSystemHabitation (already surface-free) and planetHasHabitats
     // (habitation.js's presence-only check) so this never triggers the
     // expensive per-planet terrain generation just to answer "is there
-    // anything here" for systems nobody's actually visited yet.
+    // anything here" for systems nobody's actually visited yet. Every system
+    // now carries its OWN ctx from the archetype plan (system.ctx) — a dead/
+    // ruin/trouble system's ctx has cultureId: null, so this correctly reads
+    // as "nothing" for those without needing to check origin.kind separately.
     _systemHasContent(system) {
-        if (!this.currentCtx || this.currentCtx.cultureId == null) return false;
-        if (generateSystemHabitation(system.seed, this.currentCtx).habitats.length) return true;
-        return system.planets.some(p => planetHasHabitats(p._seed, this.currentCtx, classify(p)));
+        const ctx = system.ctx;
+        if (!ctx || ctx.cultureId == null) return false;
+        if (generateSystemHabitation(system.seed, ctx).habitats.length) return true;
+        return system.planets.some(p => planetHasHabitats(p._seed, ctx, classify(p)));
     }
 
     // Jump the sector view directly into the next/previous system (by sector
@@ -273,11 +328,30 @@ class RogueApp {
         this._enterSystem(qualifying[next]);
     }
 
+    // The active per-event CultureContext (galaxy/archetypes.js's system.ctx)
+    // for wherever the stack currently is — a 'system' frame's ctx lives on
+    // its own data object (generateSector already attaches it there), a
+    // 'planet' frame stores it explicitly (its `data` is the SURFACE, not the
+    // system, so it has nowhere else to carry it). Falls back to the sector's
+    // dominant-owner ctx if something's missing (shouldn't happen once every
+    // system carries a real spec, but keeps this from ever hard-erroring).
+    _frameCtx() {
+        if (!this.top) return this.currentCtx;
+        if (this.top.level === 'system') return this.top.data.ctx || this.currentCtx;
+        if (this.top.level === 'planet') return this.top.ctx || this.currentCtx;
+        return this.currentCtx;
+    }
+
     _enterSystem(system) {
         // Star-level megastructures (§13.0b) — rolled here rather than baked
         // into the sector's system list, so systems nobody visits never pay
         // for it (IMPLEMENTATION_PLAN.md's "generate only visited children").
-        const habitation = generateSystemHabitation(system.seed, this.currentCtx);
+        // A 'trouble' archetype system (galaxy/archetypes.js) already carries
+        // its occupant habitat precomputed (system.habitation) — pirates/
+        // derelicts/rogue military aren't tied to a living ctx at all, so
+        // generateSystemHabitation (which needs ctx.cultureId) would just
+        // come back empty for them.
+        const habitation = system.habitation || generateSystemHabitation(system.seed, system.ctx);
         this.stack.push({ level: 'system', data: system, habitation });
         this._contentPlanetCursor = -1; // fresh system -> fresh qualifying-planet list
         this._render();
@@ -285,18 +359,21 @@ class RogueApp {
     }
 
     // Same idea as _systemHasContent, one level down: does this planet have
-    // any habitat at all, without generating its surface first.
-    _planetHasContent(planet) {
-        if (!this.currentCtx || this.currentCtx.cultureId == null) return false;
-        return planetHasHabitats(planet._seed, this.currentCtx, classify(planet));
+    // any habitat at all, without generating its surface first. `system` is
+    // this.top.data (the enclosing system) — its ctx is what any planet
+    // inside it would actually be placed under.
+    _planetHasContent(system, planet) {
+        const ctx = system.ctx;
+        if (!ctx || ctx.cultureId == null) return false;
+        return planetHasHabitats(planet._seed, ctx, classify(planet));
     }
 
     // Jump the system view directly into the next/previous planet (by system
     // order, wrapping) that would actually get a habitat.
     _nextContentPlanet(delta) {
         if (!this.top || this.top.level !== 'system') return;
-        const planets = this.top.data.planets;
-        const qualifying = planets.filter(p => this._planetHasContent(p));
+        const system = this.top.data;
+        const qualifying = system.planets.filter(p => this._planetHasContent(system, p));
         if (!qualifying.length) { toast('No habitat-bearing planets in this system'); return; }
 
         let next = this._contentPlanetCursor + delta;
@@ -310,10 +387,11 @@ class RogueApp {
     // structurally the same shape, so descending into a gas giant's moon works
     // through this same entry point (see engine/rogue/planet.js's moon view).
     async _enterPlanet(planet) {
+        const ctx = this._frameCtx();
         const surface = await generateSurface(planet);
-        const habitation = generatePlanetHabitation(planet._seed, this.currentCtx, surface);
-        const native = generateNativeCulture(planet._seed, this.currentCtx, surface);
-        this.stack.push({ level: 'planet', data: surface, planet, habitation, native });
+        const habitation = generatePlanetHabitation(planet._seed, ctx, surface);
+        const native = generateNativeCulture(planet._seed, ctx, surface);
+        this.stack.push({ level: 'planet', data: surface, planet, habitation, native, ctx });
         this._render();
         this._persist();
     }
@@ -326,24 +404,27 @@ class RogueApp {
     async _enterRegion(cellIndex) {
         const surface = this.top.data;
         const habitats = this.top.habitation ? this.top.habitation.habitats : [];
-        const region = await generateRegion(surface, cellIndex, { habitats, ctx: this.currentCtx });
+        const region = await generateRegion(surface, cellIndex, { habitats, ctx: this.top.ctx || this.currentCtx });
         this.stack.push({ level: 'region', data: region });
         this._render();
         this._persist();
     }
 
-    // Re-run the current sector's generator with updated params (nHab/totalSystems edits).
+    // Re-run the current sector's generator with an updated densityScale.
     _regenerateSector() {
         if (!this.top || this.top.level !== 'sector') return;
         const { seed, gx, gy } = this.top.data;
         const data = generateSector(seed, {
             bounds: { r: 50 },
-            nHab: this.nHab,
-            nSystems: this.totalSystems,
             gx, gy,
+            pop: this.population,
+            uptoStep: this.popStep,
+            touchHorizon: this._touchHorizon,
+            densityScale: this.densityScale,
             ctx: this.currentCtx
         });
         this.stack[this.stack.length - 1] = { level: 'sector', data };
+        this._contentSystemCursor = -1;
         this._render();
         this._persist();
     }
@@ -363,6 +444,7 @@ class RogueApp {
             if (target > this._popState.step) {
                 advancePopulation(this._popState, target);
                 this.population = populationView(this._popState);
+                this._touchHorizon = buildTouchHorizon(this.population);
             }
             this.popStep = target;
         }
@@ -452,7 +534,7 @@ class RogueApp {
         } else if (level === 'system') {
             this.top.index = RogueSystem(data, this.display).index;
             const mega = (this.top.habitation && this.top.habitation.habitats.length) || 0;
-            toast(`${data.name || 'System'} — ${data.planets.length} planets${mega ? `, ${mega} stellar megastructure(s)` : ''}`);
+            toast(`${data.name || 'System'} — ${data.planets.length} planets${mega ? `, ${mega} stellar megastructure(s)` : ''}${originNote(data.origin)}`);
         } else if (level === 'planet') {
             RoguePlanet(this.top.planet, data, this.planetHost, {
                 overlay: this.planetOverlay,
@@ -505,8 +587,7 @@ class RogueApp {
                 this.infoFolder.add({ v: living.length }, 'v').name('Living cultures').disable();
             }
         } else if (level === 'sector') {
-            this.infoFolder.add(this, 'nHab', 0, 20, 1).name('# Habitable').onChange(() => this._regenerateSector());
-            this.infoFolder.add(this, 'totalSystems', 20, 150, 2).name('# Total Systems').onChange(() => this._regenerateSector());
+            this.infoFolder.add(this, 'densityScale', 0.5, 2, 0.1).name('Density').onChange(() => this._regenerateSector());
             this.infoFolder.add({ v: data.systems.length }, 'v').name('Systems').disable();
             if (this.currentCtx && this.currentCtx.cultureId != null) {
                 this.infoFolder.add({ v: `${this.currentCtx.bioform} (TL ${this.currentCtx.tl})` }, 'v').name('Culture').disable();
@@ -522,12 +603,16 @@ class RogueApp {
             }
         } else if (level === 'system') {
             this.infoFolder.add({ v: data.name || data.seed }, 'v').name('Name').disable();
+            if (data.origin) {
+                this.infoFolder.add({ v: data.origin.kind }, 'v').name('Origin').disable();
+                if (data.origin.bioform) this.infoFolder.add({ v: data.origin.bioform }, 'v').name('Founding bioform').disable();
+            }
             this.infoFolder.add({ v: data.star.primary.spectral }, 'v').name('Spectral').disable();
             this.infoFolder.add({ v: data.star.multiplicity }, 'v').name('Multiplicity').disable();
             this.infoFolder.add({ v: data.planets.length }, 'v').name('Planets').disable();
             this.infoFolder.add({ v: (this.top.habitation && this.top.habitation.habitats.length) || 0 }, 'v').name('Stellar megastructures').disable();
 
-            const contentPlanets = data.planets.filter(p => this._planetHasContent(p));
+            const contentPlanets = data.planets.filter(p => this._planetHasContent(data, p));
             this.infoFolder.add({ v: contentPlanets.length }, 'v').name('Planets w/ habitats').disable();
             if (contentPlanets.length) {
                 this.infoFolder.add({ fn: () => this._nextContentPlanet(-1) }, 'fn').name('◂ Prev habitat planet');

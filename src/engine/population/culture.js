@@ -94,6 +94,12 @@ export class CultureRegistry {
     const record = {
       id,
       parent: opts.parent ?? null,
+      // 'successor' | 'schism' | null (fresh founding) — distinguishes a
+      // dark-age revival from a geographic split from a genesis founding.
+      // Set once, never changes, same append-only spirit as everything else
+      // on this record. Read by galaxy/archetypes.js to flavor birth/resettle
+      // systems differently for each origin kind.
+      inheritKind: opts.inheritKind ?? null,
       bornStep: step,
       deadStep: null,
       extinctionCause: null,

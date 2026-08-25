@@ -66,3 +66,24 @@ export function alienBaselineOf(bioform) {
 export function affinityFor(bioform, surfaceType) {
   return AFFINITY[bioform]?.[surfaceType] ?? 0;
 }
+
+// How many world types a bioform can plausibly settle (affinity >= 0.3 — the
+// same "worth the trip" threshold placementChance's affinity multiplier makes
+// meaningful). Derived from AFFINITY, not a separate tuned table, so it can't
+// drift out of sync with what habitats actually place. terran/cryophile are
+// picky (3 viable types apiece); machine settles almost anywhere (7); gasborne
+// is the rarest and pickiest of all (2 — hostile, gas giant). Used by
+// galaxy/archetypes.js to scale how many systems a bioform's presence in a
+// sector accounts for: a picky bioform holds fewer, choicer systems; an
+// opportunistic one sprawls across more marginal ones.
+const BREADTH_THRESHOLD = 0.3;
+let _breadthCache = null;
+export function settlementBreadth(bioform) {
+  if (!_breadthCache) {
+    _breadthCache = {};
+    for (const b of BIOFORMS) {
+      _breadthCache[b] = Object.values(AFFINITY[b]).filter(v => v >= BREADTH_THRESHOLD).length;
+    }
+  }
+  return _breadthCache[bioform] ?? 1;
+}

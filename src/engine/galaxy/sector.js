@@ -1,8 +1,8 @@
 import { PRNG } from '../random.js';
-import { childSeed } from '../seed.js';
 import { generateSystem } from './system.js';
 import { MakeName } from '../random_name.js';
 import { generateSectorHabitation } from '../population/habitation.js';
+import { planTouchedSector, planUntouchedSector } from './archetypes.js';
 
 function getPrismPosition(rng, { w, h, d }) {
   const x = rng.range(0, w * 10) / 10;
@@ -29,54 +29,63 @@ function getSpherePosition(rng, { r }) {
 }
 
 /**
- * Generate a 100×100 ASCII map of a 1000 ly cube
- * (each tile ≈ 10 ly in x/y, full 1000 ly depth collapsed into z)
+ * Generate a sector's systems from its OWN culture history, not a flat count
+ * (POPULATION_PLAN.md's "traceable to actual history" rule). Every system
+ * traces back to one of two things:
+ *   - A culture that actually held this sector cell at some point up to
+ *     `opts.uptoStep` — one system per historical event (birth, resettle,
+ *     death, extinction, transcension, conflict/contested), scaled by that
+ *     culture's bioform breadth; long-held sectors get a diminishing-returns
+ *     handful of extra "deepening" systems instead of one per sustained step
+ *     (see galaxy/archetypes.js's planTouchedSector).
+ *   - For a sector NO culture has ever touched: a small, distance-faded mix
+ *     of neutral outposts/native-culture candidates, ancient ruins, and
+ *     lawless trouble spots (planUntouchedSector) — genuinely empty far
+ *     enough from any culture's history, not uniformly "busy" everywhere.
+ *
+ * `opts.pop` (populationView() output) and `opts.touchHorizon`
+ * (ledger.js's buildTouchHorizon(opts.pop)) are required to build that plan;
+ * without them (e.g. a standalone test) this falls back to zero systems,
+ * since there's nothing to justify inventing any.
  *
  * @param {number} seed
- * @returns {object} { map: string, stars: array, stats: object }
+ * @param {{bounds, gx, gy, pop, uptoStep, touchHorizon, densityScale, ctx}} opts -
+ *   `ctx` here is only the sector's CURRENT dominant-owner context, used for
+ *   sector-WIDE assets (generateSectorHabitation's deep space stations/capital
+ *   ships) — individual systems get their own per-event ctx from the plan,
+ *   attached as `system.ctx`/`system.origin`.
+ * @returns {object}
  */
 export function generateSector(seed, opts = {}) {
   const rng = new PRNG(seed);
 
-  const { bounds } = opts;
+  const { bounds, gx, gy, pop, touchHorizon, densityScale = 1 } = opts;
+  const uptoStep = opts.uptoStep ?? 0;
   const H = bounds.r ? bounds.r * 2 : bounds.h;
   const W = bounds.r ? bounds.r * 2 : bounds.w;
   const D = bounds.r ? bounds.r * 2 : bounds.d;
 
+  let specs = [];
+  if (pop && touchHorizon) {
+    const key = `${gx},${gy}`;
+    const touchedAt = touchHorizon.get(key);
+    specs = (touchedAt != null && touchedAt <= uptoStep)
+      ? planTouchedSector(pop, gx, gy, uptoStep, seed, densityScale)
+      : planUntouchedSector(pop, gx, gy, uptoStep, touchHorizon, seed, densityScale);
+  }
+
   const names = [];
-  const systems = [];
-
-  // -------------------------------------------------
-  // 1. Seed 6–10 main-sequence habitable candidates, biased by this sector's
-  //    culture development (POPULATION_PLAN.md §9 step 8) — a core-tier sector
-  //    gets up to 2x the baseline habitable count, an abandoned/unclaimed one
-  //    as low as 0.5x. An explicit opts.nHab (the GUI slider) still overrides.
-  // -------------------------------------------------
-  let nHab = 6 + Math.floor(rng.rand() * 5); // 6–10
-  if (opts.ctx && opts.ctx.cultureId != null) {
-    nHab = Math.round(nHab * (0.5 + opts.ctx.development * 1.5));
-  }
-  nHab = opts.nHab || nHab;
-  for (let i = 0; i < nHab; i++) {
-    const system = generateSystem(childSeed(seed, 'system', systems.length), { forceHabitable: true });
+  const systems = specs.map(spec => {
+    const system = generateSystem(spec.seedTag, { forceHabitable: spec.forceHabitable });
     system.name = MakeName(names, rng);
     system.pos = bounds.r ? getSpherePosition(rng, bounds) : getPrismPosition(rng, bounds);
-    systems.push(system);
-  }
-
-  // -------------------------------------------------
-  // 2. Add remaining stars/multiples → total 90–120
-  // -------------------------------------------------
-  let nSystems = 90 + Math.floor(rng.rand() * 31); // 90–120
-  nSystems = opts.nSystems || nSystems;
-  while (systems.length < nSystems) {
-    const system = generateSystem(childSeed(seed, 'system', systems.length));
-    system.name = MakeName(names, rng);
-    system.pos = bounds.r ? getSpherePosition(rng, bounds) : getPrismPosition(rng, bounds);
-    systems.push(system);
-  }
+    system.ctx = spec.ctx;
+    system.origin = spec.origin;
+    if (spec.habitation) system.habitation = spec.habitation;
+    return system;
+  });
 
   const habitation = generateSectorHabitation(seed, opts.ctx, bounds);
 
-  return { systems, seed, H, W, D, r: bounds.r || null, gx: opts.gx, gy: opts.gy, habitation };
+  return { systems, seed, H, W, D, r: bounds.r || null, gx, gy, habitation };
 }
