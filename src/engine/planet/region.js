@@ -8,6 +8,7 @@ import { PRNG } from '../random.js';
 import { childSeed, coordSeed } from '../seed.js';
 import { buildFieldSampler } from './field.js';
 import { computeLocalHydrology, offsetLonLat } from './hydrology-local.js';
+import { WATER_BIOMES } from './profiles.js';
 
 // Fixed window, not the old equal-area-square sizing — with terrain as a
 // pure function of position (§11.1), a region no longer needs to "tile" its
@@ -139,6 +140,18 @@ function resolveSites(regionSeed, parentCell, localCells, opts) {
 
 const WATER_KIND_NAME = ['', 'stream', 'river', 'pond'];
 
+// A cell whose BIOME already reads as a body of water — a habitable world's
+// ocean ('Marine', habitable-biome.js's classifyBiome — elev<20) or a
+// non-habitable world's ice sheet/lava field/acid lowland (profiles.js's
+// WATER_BIOMES) — doesn't also need a stream/river/pond glyph drawn on top of
+// it. hydrology-local.js's D8 routes flow straight through these tiles same as
+// any other low ground (that's correct — an ocean is where local rivers empty
+// into), so `kind` is still legitimately nonzero there; this only decides
+// what gets DRAWN, not how flow is computed.
+function isWaterBiome(biome) {
+  return biome === 'Marine' || WATER_BIOMES.has(biome);
+}
+
 /**
  * Build one region: a WINDOW_KM x WINDOW_KM window centered on (centerLon,
  * centerLat), sampled from `surface`'s continuous field (field.js) with local
@@ -182,7 +195,7 @@ export function buildRegion(surface, centerLon, centerLat, cellIndex, opts = {})
       const kindId = hydro.kind[k];
       cells[k] = {
         x: localX, y: localY, elev, temp, moisture, biome,
-        water: kindId ? WATER_KIND_NAME[kindId] : null
+        water: (kindId && !isWaterBiome(biome)) ? WATER_KIND_NAME[kindId] : null
       };
     }
   }

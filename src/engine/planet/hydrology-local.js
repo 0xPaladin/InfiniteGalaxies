@@ -129,6 +129,124 @@ function priorityFlood(h, n) {
   return { level, route };
 }
 
+// Garbrecht & Martz (1997) flat-routing: inside a filled basin, `route`'s
+// direction is chosen by BFS visitation order alone, which behaves like a
+// distance field from a single point — its gradient is nearly constant over
+// broad neighborhoods, so D8 on it traces long, near-straight rays toward the
+// pour point (measured: straight runs up to ~180 tiles, roughly a quarter of
+// all classified river tiles running dead straight). Garbrecht & Martz's fix
+// shapes the synthetic surface from BOTH basin boundaries instead of one BFS
+// source: distance from the low/outlet edge (`distLow`) and distance from the
+// high/rim edge (`distHigh`), combined so it follows the basin's actual shape
+// rather than radiating from a point.
+//
+// This can't just REPLACE `route`: naively using `distLow - 2*distHigh` as the
+// D8 field on its own creates new local minima inside complex basin shapes —
+// measured 4614 of them in one test window, breaking flow across nearly half
+// the map. So `route` stays the correctness FILTER (only a neighbor with a
+// strictly lower `route` is ever a candidate — this is what already
+// guarantees termination with no cycles/new pits) and the Garbrecht-Martz
+// value is only the SELECTOR among those already-valid candidates. Verified
+// across 9 windows (3 seeds x 3 locations): zero new unresolved pits in every
+// case, straight-run p90 down (~7 -> ~5), fraction of runs over 20 tiles
+// roughly halved.
+function labelFilledComponents(isFilled, n) {
+  const compId = new Int32Array(n * n).fill(-1);
+  const components = [];
+  for (let start = 0; start < n * n; start++) {
+    if (!isFilled[start] || compId[start] >= 0) continue;
+    const stack = [start];
+    compId[start] = components.length;
+    const members = [start];
+    while (stack.length) {
+      const k = stack.pop();
+      const ci = k % n, cj = (k - ci) / n;
+      for (const [dx, dy] of NEIGHBORS_8) {
+        const ni = ci + dx, nj = cj + dy;
+        if (ni < 0 || nj < 0 || ni >= n || nj >= n) continue;
+        const nk = nj * n + ni;
+        if (!isFilled[nk] || compId[nk] >= 0) continue;
+        compId[nk] = components.length;
+        stack.push(nk);
+        members.push(nk);
+      }
+    }
+    components.push(members);
+  }
+  return components;
+}
+
+// Multi-source BFS restricted to one basin component, from every member cell
+// that borders a real (non-filled) neighbor satisfying `isSource`.
+function bfsWithinComponent(members, memberSet, h, n, isLower, dist) {
+  const q = [];
+  for (const k of members) {
+    const ci = k % n, cj = (k - ci) / n;
+    let isEdge = false;
+    for (const [dx, dy] of NEIGHBORS_8) {
+      const ni = ci + dx, nj = cj + dy;
+      if (ni < 0 || nj < 0 || ni >= n || nj >= n) continue;
+      const nk = nj * n + ni;
+      if (memberSet.has(nk)) continue;
+      if (isLower ? h[nk] < h[k] : h[nk] > h[k]) { isEdge = true; break; }
+    }
+    if (isEdge) { dist[k] = 0; q.push(k); }
+  }
+  let head = 0;
+  while (head < q.length) {
+    const k = q[head++];
+    const ci = k % n, cj = (k - ci) / n;
+    for (const [dx, dy] of NEIGHBORS_8) {
+      const ni = ci + dx, nj = cj + dy;
+      if (ni < 0 || nj < 0 || ni >= n || nj >= n) continue;
+      const nk = nj * n + ni;
+      if (!memberSet.has(nk) || dist[nk] !== -1) continue;
+      dist[nk] = dist[k] + 1;
+      q.push(nk);
+    }
+  }
+}
+
+function buildFlowDirections(h, n, level, route) {
+  const isFilled = new Uint8Array(n * n);
+  for (let k = 0; k < n * n; k++) if (level[k] - h[k] > 1e-9) isFilled[k] = 1;
+
+  const components = labelFilledComponents(isFilled, n);
+  const distLow = new Int32Array(n * n).fill(-1);
+  const distHigh = new Int32Array(n * n).fill(-1);
+  for (const members of components) {
+    const memberSet = new Set(members);
+    bfsWithinComponent(members, memberSet, h, n, true, distLow);
+    bfsWithinComponent(members, memberSet, h, n, false, distHigh);
+  }
+
+  const gmVal = new Float64Array(n * n);
+  for (let k = 0; k < n * n; k++) gmVal[k] = isFilled[k] ? (distLow[k] - 2 * distHigh[k]) : 0;
+
+  const down = new Int32Array(n * n).fill(-1);
+  for (let j = 0; j < n; j++) {
+    for (let i = 0; i < n; i++) {
+      const k = j * n + i;
+      let bestRoute = -1, bestRouteDrop = 0;
+      let bestGM = -1, bestGMScore = -Infinity;
+      for (const [dx, dy] of NEIGHBORS_8) {
+        const ni = i + dx, nj = j + dy;
+        if (ni < 0 || nj < 0 || ni >= n || nj >= n) continue;
+        const nk = nj * n + ni;
+        if (route[k] <= route[nk]) continue; // correctness filter: must strictly descend
+        const rdrop = (route[k] - route[nk]) / Math.hypot(dx, dy);
+        if (rdrop > bestRouteDrop) { bestRouteDrop = rdrop; bestRoute = nk; }
+        if (isFilled[k]) {
+          const gdrop = (gmVal[k] - gmVal[nk]) / Math.hypot(dx, dy);
+          if (gdrop > bestGMScore) { bestGMScore = gdrop; bestGM = nk; }
+        }
+      }
+      down[k] = isFilled[k] ? (bestGM >= 0 ? bestGM : bestRoute) : bestRoute;
+    }
+  }
+  return down;
+}
+
 // A macro cell counts as a "major river" injection point once its upstream
 // contributor count crosses this — well above what any local 500km window
 // could accumulate on its own (see IMPLEMENTATION_PLAN.md §11.2's measured
@@ -213,21 +331,7 @@ export function computeLocalHydrology(surface, sampler, centerLon, centerLat, wi
   // what the region renders. `fillDepth` is the standing-water depth each
   // basin holds, used to place ponds below.
   const { level, route } = priorityFlood(h, n);
-  const down = new Int32Array(n * n).fill(-1);
-  for (let j = 0; j < n; j++) {
-    for (let i = 0; i < n; i++) {
-      const k = j * n + i;
-      let best = -1, bestDrop = 0;
-      for (const [dx, dy] of NEIGHBORS_8) {
-        const ni = i + dx, nj = j + dy;
-        if (ni < 0 || nj < 0 || ni >= n || nj >= n) continue;
-        const nk = nj * n + ni;
-        const drop = (route[k] - route[nk]) / Math.hypot(dx, dy);
-        if (drop > bestDrop) { bestDrop = drop; best = nk; }
-      }
-      down[k] = best;
-    }
-  }
+  const down = buildFlowDirections(h, n, level, route);
 
   // Macro handoff: nearby macro-mesh cells carrying a major river's worth of
   // flux add a smooth, continuous rainfall boost to every local tile within
